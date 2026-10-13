@@ -13,7 +13,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace atom::dsp {
+namespace adam::dsp {
 
 class Limiter {
 public:
@@ -105,4 +105,4 @@ private:
     uint64_t backstopHits_ = 0;
 };
 
-}  // namespace atom::dsp
+}  // namespace adam::dsp

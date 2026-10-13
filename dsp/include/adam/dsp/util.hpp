@@ -3,7 +3,7 @@
 
 #include <cmath>
 
-namespace atom::dsp {
+namespace adam::dsp {
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
 inline float gainToDb(float g) { return g > 1e-9f ? 20.0f * std::log10(g) : -180.0f; }
@@ -60,4 +60,4 @@ private:
     float r_ = 0.999f, x1_ = 0.0f, y1_ = 0.0f;
 };
 
-}  // namespace atom::dsp
+}  // namespace adam::dsp

@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string>
 
-namespace atom::core_synth {
+namespace adam::core_synth {
 
 namespace {
 
@@ -153,4 +153,4 @@ const char* paramsJson() {
     return json.c_str();
 }
 
-}  // namespace atom::core_synth
+}  // namespace adam::core_synth

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the static workshop: dist/workshop/ = workshop/src + atom_synth.wasm
+"""Assemble the static workshop: dist/workshop/ = workshop/src + adam_synth.wasm
 + the fixture patterns and presets (with index.json) + build.json. Every URL in
 the app is relative, so the folder works at any path (e.g. /staging/<port>/)."""
 from __future__ import annotations
@@ -18,7 +18,7 @@ def main() -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
     shutil.copytree(ROOT / "workshop" / "src", OUT)
-    shutil.copy2(ROOT / "build" / "wasm" / "atom_synth.wasm", OUT / "atom_synth.wasm")
+    shutil.copy2(ROOT / "build" / "wasm" / "adam_synth.wasm", OUT / "adam_synth.wasm")
     shutil.copytree(ROOT / "fixtures" / "patterns", OUT / "patterns")
     (OUT / "presets").mkdir()
     presets = []

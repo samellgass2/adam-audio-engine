@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace atom::core_synth {
+namespace adam::core_synth {
 
 namespace {
 // Per-voice level before summing. Two full-scale saws at osc_mix 50% peak near
@@ -283,4 +283,4 @@ Meter CoreSynth::readMeter() {
     return m;
 }
 
-}  // namespace atom::core_synth
+}  // namespace adam::core_synth

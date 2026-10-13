@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-namespace atom::dsp {
+namespace adam::dsp {
 
 class Svf {
 public:
@@ -59,4 +59,4 @@ private:
     Svf a_, b_;
 };
 
-}  // namespace atom::dsp
+}  // namespace adam::dsp

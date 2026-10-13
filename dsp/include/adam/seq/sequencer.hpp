@@ -2,7 +2,7 @@
 // later the AU's audition mode), so loop-boundary behaviour is tested natively
 // and identical in the browser.
 //
-// Pattern text format ("atom-pattern 1"), one statement per line, '#' comments:
+// Pattern text format ("adam-pattern 1"), one statement per line, '#' comments:
 //   name   Soft sustained chords
 //   bpm    72
 //   length 16                  # loop length in beats
@@ -16,7 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace atom::seq {
+namespace adam::seq {
 
 struct Event {
     double beat;
@@ -167,4 +167,4 @@ private:
     bool playing_ = false;
 };
 
-}  // namespace atom::seq
+}  // namespace adam::seq

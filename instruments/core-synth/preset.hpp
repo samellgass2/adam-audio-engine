@@ -8,7 +8,7 @@
 
 #include "core_synth.hpp"
 
-namespace atom::core_synth {
+namespace adam::core_synth {
 
 // Applies the preset on top of the defaults. Returns params applied.
 inline int applyPreset(CoreSynth& synth, const char* text, bool fromDefaults = true) {
@@ -39,4 +39,4 @@ inline int applyPreset(CoreSynth& synth, const char* text, bool fromDefaults = t
     return applied;
 }
 
-}  // namespace atom::core_synth
+}  // namespace adam::core_synth

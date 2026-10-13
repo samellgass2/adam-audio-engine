@@ -10,7 +10,7 @@ Newest first. "Awaiting listen" means no human has judged it yet.
   low-pass (12/24 dB), filter/amp ADSR, LFO, glide, 16-voice poly, limiter.
 - **Expected:** clean, unaliased analog-style subtractive tones; pads swell
   smoothly; stabs are punchy; nothing clicks, sticks or clips.
-- **Measured** (`build/native/atom-tests`, 661 checks, all green):
+- **Measured** (`build/native/adam-tests`, 661 checks, all green):
   - pitch within 0.05% at 44.1/48/96 kHz, MIDI 33–93;
   - saw inharmonic (aliasing) energy: naive −14.6 → PolyBLEP −33.9 dB at
     1661 Hz; −11.5 → −29.8 dB at 3136 Hz (G7);

@@ -1,4 +1,4 @@
-// Atom Workshop — main thread. Builds the UI from the engine's own parameter
+// Adam Workshop — main thread. Builds the UI from the engine's own parameter
 // contract and talks to the AudioWorklet. A non-rendering "mirror" instance of
 // the same WASM answers every mapping/parsing question (normalized<->physical,
 // presets, pattern tempo), so no synth logic is re-implemented in JavaScript.
@@ -28,7 +28,7 @@ const state = {
 function mirrorText(text) {
   const { w, s } = state.mirror;
   const bytes = enc.encode(text);
-  const ptr = w.atom_text_buffer(s, bytes.length + 1);
+  const ptr = w.adam_text_buffer(s, bytes.length + 1);
   const mem = new Uint8Array(w.memory.buffer, ptr, bytes.length + 1);
   mem.set(bytes);
   mem[bytes.length] = 0;
@@ -43,24 +43,24 @@ function cString(w, ptr) {
 }
 
 async function loadEngine() {
-  const res = await fetch("./atom_synth.wasm");
-  if (!res.ok) throw new Error(`atom_synth.wasm: HTTP ${res.status}`);
+  const res = await fetch("./adam_synth.wasm");
+  if (!res.ok) throw new Error(`adam_synth.wasm: HTTP ${res.status}`);
   state.wasmBytes = await res.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(state.wasmBytes, {});
   const w = instance.exports;
   w._initialize?.();
-  state.mirror = { w, s: w.atom_synth_create(48000) };
-  state.params = JSON.parse(cString(w, w.atom_params_json()));
+  state.mirror = { w, s: w.adam_synth_create(48000) };
+  state.params = JSON.parse(cString(w, w.adam_params_json()));
 }
 
-const toPhysical = (i, n) => state.mirror.w.atom_param_to_physical(i, n);
-const toNormalized = (i, v) => state.mirror.w.atom_param_to_normalized(i, v);
-const getParam = (i) => state.mirror.w.atom_synth_get_param(state.mirror.s, i);
+const toPhysical = (i, n) => state.mirror.w.adam_param_to_physical(i, n);
+const toNormalized = (i, v) => state.mirror.w.adam_param_to_normalized(i, v);
+const getParam = (i) => state.mirror.w.adam_synth_get_param(state.mirror.s, i);
 
 function setParam(i, physical) {
   const { w, s } = state.mirror;
-  w.atom_synth_set_param(s, i, physical);
-  const v = w.atom_synth_get_param(s, i); // clamped by the engine
+  w.adam_synth_set_param(s, i, physical);
+  const v = w.adam_synth_get_param(s, i); // clamped by the engine
   state.node?.port.postMessage({ type: "param", index: i, value: v });
   state.controls.get(i)?.set(v);
   savePreset();
@@ -73,7 +73,7 @@ function presetText() {
 
 function applyPresetText(text) {
   const { w, s } = state.mirror;
-  w.atom_synth_apply_preset(s, mirrorText(text));
+  w.adam_synth_apply_preset(s, mirrorText(text));
   for (const p of state.params) state.controls.get(p.index)?.set(getParam(p.index));
   state.node?.port.postMessage({ type: "preset", bytes: enc.encode(text) });
   savePreset();
@@ -82,7 +82,7 @@ function applyPresetText(text) {
 function savePreset() {
   $("presetText").value = presetText();
   try {
-    localStorage.setItem("atom.workshop.preset", $("presetText").value);
+    localStorage.setItem("adam.workshop.preset", $("presetText").value);
   } catch {
     /* a convenience only */
   }
@@ -174,16 +174,16 @@ async function loadIndexes() {
 async function selectPattern(file) {
   const text = await fetch(`./patterns/${file}`).then((r) => r.text());
   const { w, s } = state.mirror;
-  w.atom_seq_load(s, mirrorText(text));
-  const bpm = Math.round(w.atom_seq_pattern_bpm(s));
-  state.lengthBeats = w.atom_seq_length(s);
+  w.adam_seq_load(s, mirrorText(text));
+  const bpm = Math.round(w.adam_seq_pattern_bpm(s));
+  state.lengthBeats = w.adam_seq_length(s);
   $("bpm").value = bpm;
   $("bpmval").textContent = `${bpm} bpm`;
   $("purpose").textContent = JSON.parse($("pattern").dataset.purposes)[file] || "";
   state.node?.port.postMessage({ type: "pattern", bytes: enc.encode(text) });
   state.node?.port.postMessage({ type: "bpm", bpm });
   try {
-    localStorage.setItem("atom.workshop.pattern", file);
+    localStorage.setItem("adam.workshop.pattern", file);
   } catch {
     /* convenience */
   }
@@ -193,7 +193,7 @@ async function selectPreset(file) {
   if (file === "__last") {
     let text = null;
     try {
-      text = localStorage.getItem("atom.workshop.preset");
+      text = localStorage.getItem("adam.workshop.preset");
     } catch {
       /* convenience */
     }
@@ -207,7 +207,7 @@ async function selectPreset(file) {
 async function startAudio() {
   const ctx = new AudioContext({ latencyHint: "interactive" });
   await ctx.audioWorklet.addModule("./worklet.js");
-  const node = new AudioWorkletNode(ctx, "atom-synth", {
+  const node = new AudioWorkletNode(ctx, "adam-synth", {
     numberOfInputs: 0,
     numberOfOutputs: 1,
     outputChannelCount: [2],
@@ -438,7 +438,7 @@ async function boot() {
     keyboardEvents();
     let lastPattern = null;
     try {
-      lastPattern = localStorage.getItem("atom.workshop.pattern");
+      lastPattern = localStorage.getItem("adam.workshop.pattern");
     } catch {
       /* convenience */
     }

@@ -9,14 +9,14 @@
 #include <array>
 #include <cstdint>
 
-#include "atom/dsp/envelope.hpp"
-#include "atom/dsp/filter.hpp"
-#include "atom/dsp/limiter.hpp"
-#include "atom/dsp/oscillator.hpp"
-#include "atom/dsp/util.hpp"
+#include "adam/dsp/envelope.hpp"
+#include "adam/dsp/filter.hpp"
+#include "adam/dsp/limiter.hpp"
+#include "adam/dsp/oscillator.hpp"
+#include "adam/dsp/util.hpp"
 #include "params.hpp"
 
-namespace atom::core_synth {
+namespace adam::core_synth {
 
 constexpr int kMaxVoices = 16;
 
@@ -87,4 +87,4 @@ private:
     Meter meter_;
 };
 
-}  // namespace atom::core_synth
+}  // namespace adam::core_synth

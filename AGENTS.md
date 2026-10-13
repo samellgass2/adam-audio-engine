@@ -1,4 +1,4 @@
-# Agent instructions — atom-audio-engine
+# Agent instructions — adam-audio-engine
 
 Read this, `README.md`, `docs/architecture.md` and the top of
 `docs/experiment-ledger.md` before changing anything.
@@ -8,8 +8,8 @@ Read this, `README.md`, `docs/architecture.md` and the top of
 1. **One implementation of the sound.** DSP lives in `dsp/` and
    `instruments/`. Hosts (WASM, renderer, AU) only move events in and samples
    out. Never write synthesis, mapping or parsing logic in JavaScript — the
-   workshop asks the WASM (`atom_param_to_physical`, `atom_synth_apply_preset`,
-   `atom_seq_*`).
+   workshop asks the WASM (`adam_param_to_physical`, `adam_synth_apply_preset`,
+   `adam_seq_*`).
 2. **Parameter ids are forever.** `params.cpp` is the contract. Append new
    parameters at the end of `ParamId`; never renumber, rename or change a
    unit/range meaning once a Logic session may depend on it.

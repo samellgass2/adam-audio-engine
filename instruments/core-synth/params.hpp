@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace atom::core_synth {
+namespace adam::core_synth {
 
 enum class Mapping : uint8_t {
     Linear,  // physical = min + n * (max - min)
@@ -73,4 +73,4 @@ float clampPhysical(ParamId id, float physical);
 // The whole contract as JSON (built once; static storage).
 const char* paramsJson();
 
-}  // namespace atom::core_synth
+}  // namespace adam::core_synth

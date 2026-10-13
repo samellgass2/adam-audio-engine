@@ -4,7 +4,7 @@
 
 #include <cmath>
 
-namespace atom::dsp {
+namespace adam::dsp {
 
 class Adsr {
 public:
@@ -82,4 +82,4 @@ private:
     Stage stage_ = Stage::Idle;
 };
 
-}  // namespace atom::dsp
+}  // namespace adam::dsp

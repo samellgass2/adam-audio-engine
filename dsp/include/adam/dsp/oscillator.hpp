@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace atom::dsp {
+namespace adam::dsp {
 
 enum class Wave : uint8_t { Sine = 0, Triangle = 1, Saw = 2, Square = 3 };
 
@@ -91,4 +91,4 @@ private:
     uint32_t state_;
 };
 
-}  // namespace atom::dsp
+}  // namespace adam::dsp

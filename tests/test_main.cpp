@@ -1,4 +1,4 @@
-// atom-tests: correctness and signal-integrity tests on RENDERED audio.
+// adam-tests: correctness and signal-integrity tests on RENDERED audio.
 // Each test states the prediction it checks. No framework: a failed CHECK
 // prints the expression and measured values; the process exits non-zero.
 #include <algorithm>
@@ -12,15 +12,15 @@
 #include <string>
 #include <vector>
 
-#include "atom/dsp/limiter.hpp"
-#include "atom/dsp/oscillator.hpp"
-#include "atom/seq/sequencer.hpp"
+#include "adam/dsp/limiter.hpp"
+#include "adam/dsp/oscillator.hpp"
+#include "adam/seq/sequencer.hpp"
 #include "c_api.h"
 #include "core_synth.hpp"
 #include "params.hpp"
 #include "preset.hpp"
 
-using namespace atom;
+using namespace adam;
 using core_synth::CoreSynth;
 using core_synth::ParamId;
 
@@ -156,7 +156,7 @@ double inharmonicDb(const std::vector<double>& p, double f0, float sr, size_t n,
 }
 
 std::string readFixture(const std::string& rel) {
-    std::ifstream f(std::string(ATOM_FIXTURES_DIR) + "/" + rel);
+    std::ifstream f(std::string(ADAM_FIXTURES_DIR) + "/" + rel);
     std::stringstream ss;
     ss << f.rdbuf();
     return ss.str();
@@ -371,36 +371,36 @@ void test_patterns_render_clean() {
     const float ceiling = std::pow(10.0f, -1.0f / 20.0f);
     for (const char* pre : presets) {
         for (const char* pat : patterns) {
-            AtomSynth* s = atom_synth_create(kSr);
-            atom_synth_apply_preset(s, readFixture(std::string("presets/") + pre + ".preset").c_str());
-            CHECK(atom_seq_load(s, readFixture(std::string("patterns/") + pat + ".pat").c_str()) > 0, "%s loads", pat);
-            atom_seq_set_bpm(s, atom_seq_pattern_bpm(s));
-            atom_seq_play(s, 1);
-            const double secs = atom_seq_length(s) * 60.0 / atom_seq_pattern_bpm(s) * 1.5;
+            AdamSynth* s = adam_synth_create(kSr);
+            adam_synth_apply_preset(s, readFixture(std::string("presets/") + pre + ".preset").c_str());
+            CHECK(adam_seq_load(s, readFixture(std::string("patterns/") + pat + ".pat").c_str()) > 0, "%s loads", pat);
+            adam_seq_set_bpm(s, adam_seq_pattern_bpm(s));
+            adam_seq_play(s, 1);
+            const double secs = adam_seq_length(s) * 60.0 / adam_seq_pattern_bpm(s) * 1.5;
             float peak = 0;
             double energy = 0;
             bool finite = true;
             const long frames = static_cast<long>(secs * kSr);
             for (long d = 0; d < frames; d += 128) {
-                atom_synth_render(s, 128);
-                const float* l = atom_synth_out_left(s);
-                const float* r = atom_synth_out_right(s);
+                adam_synth_render(s, 128);
+                const float* l = adam_synth_out_left(s);
+                const float* r = adam_synth_out_right(s);
                 for (int i = 0; i < 128; ++i) {
                     finite = finite && std::isfinite(l[i]) && std::isfinite(r[i]);
                     peak = std::max(peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
                     energy += double(l[i]) * l[i];
                 }
             }
-            atom_seq_play(s, 0);
+            adam_seq_play(s, 0);
             float tailPeak = 0;
             // the longest preset release is 1.8 s; a voice goes idle at -80 dB,
             // ~1.33x its release time, so allow 4 s
-            for (int b = 0; b < 1500; ++b) atom_synth_render(s, 128);
+            for (int b = 0; b < 1500; ++b) adam_synth_render(s, 128);
             for (int b = 0; b < 40; ++b) {
-                atom_synth_render(s, 128);
-                tailPeak = std::max(tailPeak, peakOf(std::vector<float>(atom_synth_out_left(s), atom_synth_out_left(s) + 128)));
+                adam_synth_render(s, 128);
+                tailPeak = std::max(tailPeak, peakOf(std::vector<float>(adam_synth_out_left(s), adam_synth_out_left(s) + 128)));
             }
-            const float* m = atom_synth_read_meter(s);
+            const float* m = adam_synth_read_meter(s);
             CHECK(finite, "%s/%s non-finite", pre, pat);
             CHECK(peak <= ceiling * 1.0001f, "%s/%s peak %.4f > ceiling", pre, pat, peak);
             CHECK(m[6] == 0, "%s/%s backstop engaged %g times", pre, pat, m[6]);
@@ -408,7 +408,7 @@ void test_patterns_render_clean() {
             CHECK(energy > 1e-3, "%s/%s silent", pre, pat);
             CHECK(tailPeak < 1e-4f && m[5] == 0, "%s/%s still sounding after stop (peak %g, voices %g)", pre, pat,
                   tailPeak, m[5]);
-            atom_synth_destroy(s);
+            adam_synth_destroy(s);
         }
     }
 }
@@ -561,18 +561,18 @@ void test_determinism_and_block_size() {
     // Prediction: the same pattern + preset renders bit-identically twice, and
     // identically at block sizes 64 and 333 (events are sample-accurate).
     auto run = [](int block) {
-        AtomSynth* s = atom_synth_create(kSr);
-        atom_synth_apply_preset(s, readFixture("presets/bright_chords.preset").c_str());
-        atom_seq_load(s, readFixture("patterns/tight_chords.pat").c_str());
-        atom_seq_set_bpm(s, atom_seq_pattern_bpm(s));
-        atom_seq_play(s, 1);
+        AdamSynth* s = adam_synth_create(kSr);
+        adam_synth_apply_preset(s, readFixture("presets/bright_chords.preset").c_str());
+        adam_seq_load(s, readFixture("patterns/tight_chords.pat").c_str());
+        adam_seq_set_bpm(s, adam_seq_pattern_bpm(s));
+        adam_seq_play(s, 1);
         std::vector<float> out;
         for (long d = 0; d < 96000; d += block) {
             const int n = static_cast<int>(std::min<long>(block, 96000 - d));
-            atom_synth_render(s, n);
-            out.insert(out.end(), atom_synth_out_left(s), atom_synth_out_left(s) + n);
+            adam_synth_render(s, n);
+            out.insert(out.end(), adam_synth_out_left(s), adam_synth_out_left(s) + n);
         }
-        atom_synth_destroy(s);
+        adam_synth_destroy(s);
         return out;
     };
     const auto a = run(128), b = run(128), c = run(64), d = run(333);
@@ -603,7 +603,7 @@ int main() {
         {"limiter_intersample", test_limiter_intersample},
         {"determinism_block_size", test_determinism_and_block_size},
     };
-    const char* only = std::getenv("ATOM_TEST");
+    const char* only = std::getenv("ADAM_TEST");
     for (auto& t : tests) {
         if (only && std::string(only) != t.name) continue;
         g_test = t.name;

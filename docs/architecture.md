@@ -8,7 +8,7 @@
             │ Σ ─▶ master ─▶ DC block ─▶ lookahead limiter (−1 dBFS)  │
             └───────────────────────── C API ─────────────────────────┘
                  │                     │                      │
-          WASM (standalone)      atom-render (native)    JUCE AU (next)
+          WASM (standalone)      adam-render (native)    JUCE AU (next)
           AudioWorklet           WAV + JSON stats        Logic Pro
           workshop UI            tests / agents
 ```
