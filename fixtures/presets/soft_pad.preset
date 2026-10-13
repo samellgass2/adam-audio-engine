@@ -1,0 +1,24 @@
+# Soft pad: slow swell, dark detuned saws, gentle filter breathing.
+osc1_wave 2
+osc2_wave 1
+osc2_detune 9
+osc_mix 45
+filter_cutoff 900
+filter_resonance 18
+filter_slope 1
+filter_keytrack 40
+filter_env_amount 1.5
+filt_attack 900
+filt_decay 2500
+filt_sustain 35
+filt_release 1800
+amp_attack 600
+amp_decay 1500
+amp_sustain 85
+amp_release 1800
+velocity_sens 30
+lfo_wave 0
+lfo_rate 0.3
+lfo_cutoff 0.6
+spread 70
+master_gain -8

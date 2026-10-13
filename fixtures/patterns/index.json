@@ -1,0 +1,9 @@
+[
+  {"file":"pad_chords.pat","name":"Soft sustained chords","purpose":"pads, slow attack/release, harmonic smoothness"},
+  {"file":"tight_chords.pat","name":"Tight repeated chords","purpose":"supersaw-style stabs, note transitions, polyphony"},
+  {"file":"lead_melody.pat","name":"Lead melody","purpose":"pitch tracking, articulation, legato vs detached"},
+  {"file":"staccato.pat","name":"Short staccato notes","purpose":"attack behaviour, fast release, percussive patches"},
+  {"file":"fast_repeats.pat","name":"Fast repeated notes","purpose":"voice handling and envelope retriggering"},
+  {"file":"wide_arpeggio.pat","name":"Wide-register arpeggio","purpose":"aliasing, frequency response, pitch consistency"},
+  {"file":"dense_overlap.pat","name":"Dense overlapping notes","purpose":"polyphony limits, voice stealing, output safety"}
+]

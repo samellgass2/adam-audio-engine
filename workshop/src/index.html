@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Atom Workshop</title>
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%276%27 fill=%27%2346b4ff%27/%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="logo">⚛</span>
+      <div>
+        <h1>Atom Workshop</h1>
+        <p class="sub"><span id="instrument">Core Synth</span> · <span id="build">…</span></p>
+      </div>
+    </div>
+    <button id="start" class="primary">Start audio</button>
+  </header>
+
+  <main id="app" class="locked">
+    <section class="transport card">
+      <div class="row">
+        <label class="field grow">
+          <span>Pattern</span>
+          <select id="pattern"></select>
+        </label>
+        <label class="field grow">
+          <span>Preset</span>
+          <select id="preset"></select>
+        </label>
+      </div>
+      <p id="purpose" class="hint"></p>
+      <div class="row">
+        <button id="play" class="primary wide">▶ Play</button>
+        <button id="loop" class="toggle on" aria-pressed="true">⟲ Loop</button>
+        <button id="panic" title="Stop everything now">■ Panic</button>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>Tempo <b id="bpmval"></b></span>
+          <input id="bpm" type="range" min="40" max="200" step="1" />
+        </label>
+        <div class="beat" aria-label="Beat"><div id="beatbar"></div></div>
+      </div>
+    </section>
+
+    <section class="monitor card">
+      <div class="meters">
+        <div class="meter"><div class="fill" id="mL"></div><div class="rms" id="rL"></div></div>
+        <div class="meter"><div class="fill" id="mR"></div><div class="rms" id="rR"></div></div>
+        <div class="readout">
+          <div><b id="peakdb">−∞</b> dBFS peak</div>
+          <div><b id="grdb">0.0</b> dB limiting</div>
+          <div><b id="voices">0</b> voices</div>
+          <div id="safety" class="ok">output safe</div>
+        </div>
+      </div>
+      <div class="scopes">
+        <canvas id="spectrum"></canvas>
+        <canvas id="scope"></canvas>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>Listening level <b id="volval"></b></span>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" />
+        </label>
+        <button id="mute" class="toggle" aria-pressed="false">Mute</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Play it</h2>
+        <span class="hint">keys A–K play C4–C5 · Z/X octave</span>
+      </div>
+      <div id="keyboard" class="keyboard"></div>
+    </section>
+
+    <section id="params" class="params"></section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Share this sound</h2>
+        <button id="copy">Copy preset</button>
+      </div>
+      <p class="hint">Copies every parameter as preset text — paste it back to Claude with what you hear.</p>
+      <textarea id="presetText" rows="4" readonly></textarea>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

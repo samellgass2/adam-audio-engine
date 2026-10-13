@@ -1,0 +1,23 @@
+# Pluck: square + saw, resonant filter envelope, no sustain.
+osc1_wave 3
+osc2_wave 2
+osc2_semi 12
+osc2_detune 4
+osc_mix 35
+pulse_width 35
+filter_cutoff 400
+filter_resonance 45
+filter_slope 1
+filter_keytrack 70
+filter_env_amount 4.5
+filt_attack 1
+filt_decay 180
+filt_sustain 0
+filt_release 150
+amp_attack 1
+amp_decay 450
+amp_sustain 0
+amp_release 300
+velocity_sens 70
+spread 35
+master_gain -6

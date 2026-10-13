@@ -1,0 +1,21 @@
+# Bright chords / lead: wide detuned saws, open filter with a short env snap.
+osc1_wave 2
+osc2_wave 2
+osc2_detune 14
+osc_mix 50
+filter_cutoff 3200
+filter_resonance 25
+filter_slope 1
+filter_keytrack 60
+filter_env_amount 2.5
+filt_attack 2
+filt_decay 280
+filt_sustain 40
+filt_release 250
+amp_attack 3
+amp_decay 400
+amp_sustain 80
+amp_release 220
+velocity_sens 50
+spread 55
+master_gain -7

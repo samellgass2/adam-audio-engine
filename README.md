@@ -1,0 +1,62 @@
+# Atom Audio Engine
+
+Our own instruments and effects: one portable C++ DSP core, heard in a browser
+workshop (WebAssembly + AudioWorklet) and — next — played in Logic Pro as an
+Audio Unit. Spec: adamOS `docs/specs/ATOM_AUDIO_ENGINE_2026_10_13.md`.
+
+*Build it, hear it, measure it, improve it.*
+
+## What exists (checkpoints 0–2)
+
+- **Core synth** (`instruments/core-synth`): 2 band-limited oscillators
+  (sine/triangle/saw/pulse, PolyBLEP/BLAMP) + noise, resonant ZDF low-pass
+  (12/24 dB), filter + amp ADSR, LFO → pitch/cutoff, glide, 16-voice
+  polyphony (8 default) with click-free stealing, sustain pedal, stereo spread,
+  DC blocker and a −1 dBFS lookahead limiter with an intersample-aware
+  detector. 29 parameters, one contract (`params.cpp`).
+- **One sequencer** (`dsp/include/atom/seq`): sample-accurate pattern playback
+  on an integer sample clock, used by the renderer, the tests and the browser.
+- **Hosts:** a C API (`c_api.h`) → standalone WASM (82 KB, zero imports) for
+  the workshop; `atom-render` for headless renders. The JUCE AU comes after the
+  listening gate.
+- **Workshop** (`workshop/src`): pattern + preset pickers, play/loop/tempo, all
+  parameters live, meters, limiter and safety readout, spectrum + scope, an
+  on-screen/computer keyboard, "Copy preset" for feedback.
+- **Evidence:** `atom-tests` (661 checks on rendered audio) and a native↔WASM
+  parity check (residual −125 dB).
+
+## Prerequisites (macOS, Apple Silicon)
+
+- Xcode command-line tools (clang), CMake ≥ 3.22, Ninja, Python 3, Node ≥ 18.
+- Emscripten via emsdk, outside the repo:
+  `git clone https://github.com/emscripten-core/emsdk ~/emsdk && ~/emsdk/emsdk install 6.0.12 && ~/emsdk/emsdk activate 6.0.12`
+  (`scripts/build.sh` sources `~/emsdk/emsdk_env.sh`, or `$EMSDK`).
+
+## Commands
+
+```bash
+scripts/build.sh     # native (tests + renderer) + WASM + dist/workshop
+scripts/test.sh      # 661 checks + native/WASM parity
+build/native/atom-render --pattern fixtures/patterns/pad_chords.pat \
+  --preset fixtures/presets/soft_pad.preset --loops 2 --out out/pad.wav
+python3 tools/gen_patterns.py   # regenerate fixtures/patterns + fixtures/midi
+scripts/stage.sh     # rebuild the workshop in place (staging serves dist/workshop)
+```
+
+Staged at `https://controlplane.samellgass.com/staging?port=8432` (the
+adamOS staging tool serves `dist/workshop`; a rebuild is live on reload).
+
+## Layout
+
+```
+dsp/include/atom/dsp/     oscillator, envelope, filter, limiter, util (header-only)
+dsp/include/atom/seq/     the shared pattern sequencer
+instruments/core-synth/   params (the contract), engine, presets, C API
+hosts/wasm/               the C API as a standalone WASM module
+hosts/offline-renderer/   atom-render
+workshop/src/             the browser workshop (static, relative URLs)
+fixtures/                 patterns (.pat + .mid), presets
+tests/                    atom-tests
+tools/                    pattern generator, workshop assembler, parity check
+docs/                     architecture, experiment ledger
+```
