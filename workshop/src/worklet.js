@@ -40,6 +40,8 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
       case "preset": {
         const ptr = this.writeText(m.bytes);
         if (ptr) w.adam_synth_apply_preset(s, ptr);
+        // while silent, land on the patch at once; while playing, glide (no clicks)
+        if (ptr && !w.adam_seq_playing(s)) w.adam_synth_snap_params(s);
         break;
       }
       case "pattern": {

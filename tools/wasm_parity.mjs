@@ -26,6 +26,7 @@ const text = (t) => {
   return p;
 };
 w.adam_synth_apply_preset(s, text(fs.readFileSync(presetPath, "utf8")));
+w.adam_synth_snap_params(s); // load the patch exactly as adam-render does
 if (w.adam_seq_load(s, text(fs.readFileSync(patPath, "utf8"))) <= 0) throw new Error("pattern rejected");
 w.adam_seq_set_bpm(s, w.adam_seq_pattern_bpm(s));
 w.adam_seq_set_loop(s, 1);
