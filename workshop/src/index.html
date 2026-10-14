@@ -91,7 +91,11 @@
     <section class="card">
       <div class="row between">
         <h2>Play it</h2>
-        <span class="hint">keys A–K play C4–C5 · Z/X octave</span>
+        <div class="row">
+          <button id="octDown" aria-label="Octave down">◀ Oct</button>
+          <b id="octLabel">C3–C5</b>
+          <button id="octUp" aria-label="Octave up">Oct ▶</button>
+        </div>
       </div>
       <div id="keyboard" class="keyboard"></div>
     </section>
@@ -100,10 +104,16 @@
 
     <section class="card">
       <div class="row between">
-        <h2>Share this sound</h2>
-        <button id="copy">Copy preset</button>
+        <h2>Patches</h2>
+        <div class="row">
+          <button id="save">Save patch…</button>
+          <button id="delete">Delete</button>
+          <button id="download">Download</button>
+          <button id="copy">Copy</button>
+        </div>
       </div>
-      <p class="hint">Copies every parameter as preset text — paste it back to Claude with what you hear.</p>
+      <p class="hint">Saved patches live on this device and appear under “My patches” in Preset. Download gives a
+        <code>.preset</code> file the renderer and the Logic AU tooling read; Copy puts the text on the clipboard to paste back to Claude.</p>
       <textarea id="presetText" rows="4" readonly></textarea>
     </section>
   </main>

@@ -110,7 +110,8 @@ function buildParams() {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `<h2>${group}</h2>`;
-    for (const p of list) card.appendChild(p.mapping === "choice" ? choiceControl(p) : sliderControl(p));
+    for (const p of list)
+      card.appendChild(p.mapping === "choice" ? choiceControl(p) : p.mapping === "int" ? stepperControl(p) : sliderControl(p));
     root.appendChild(card);
   }
 }
@@ -130,6 +131,29 @@ function sliderControl(p) {
       out.textContent = fmt(p, v);
     },
   });
+  state.controls.get(p.index).set(getParam(p.index));
+  return el;
+}
+
+// Whole-number params (semitones, voices): tap to step, not a slider.
+function stepperControl(p) {
+  const el = document.createElement("div");
+  el.className = "param";
+  const big = p.max - p.min >= 24 ? 12 : 0; // octave jumps for wide ranges
+  const steps = [...(big ? [-big] : []), -1, 1, ...(big ? [big] : [])];
+  el.innerHTML = `<div class="top"><span>${p.name}</span></div><div class="stepper"></div>`;
+  const box = el.querySelector(".stepper");
+  const value = document.createElement("b");
+  steps.forEach((d) => {
+    if (d === 1) box.appendChild(value);
+    const b = document.createElement("button");
+    b.textContent = `${d > 0 ? "+" : "−"}${Math.abs(d)}`;
+    b.setAttribute("aria-label", `${p.name} ${d > 0 ? "up" : "down"} ${Math.abs(d)}`);
+    b.addEventListener("click", () => setParam(p.index, getParam(p.index) + d));
+    box.appendChild(b);
+  });
+  value.addEventListener("dblclick", () => setParam(p.index, p.default));
+  state.controls.set(p.index, { set: (v) => (value.textContent = fmt(p, v)) });
   state.controls.get(p.index).set(getParam(p.index));
   return el;
 }
@@ -189,7 +213,80 @@ async function selectPattern(file) {
   }
 }
 
+// ------------------------------------------------------------- patches
+const PATCH_KEY = "adam.workshop.patches";
+
+function loadPatches() {
+  try {
+    return JSON.parse(localStorage.getItem(PATCH_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function storePatches(patches) {
+  try {
+    localStorage.setItem(PATCH_KEY, JSON.stringify(patches));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function refreshPatchOptions(selectName) {
+  const sel = $("preset");
+  sel.querySelector("optgroup[label='My patches']")?.remove();
+  const names = Object.keys(loadPatches()).sort();
+  if (names.length) {
+    const group = document.createElement("optgroup");
+    group.label = "My patches";
+    for (const n of names) group.appendChild(new Option(n, `patch:${n}`));
+    sel.appendChild(group);
+  }
+  if (selectName) sel.value = `patch:${selectName}`;
+}
+
+function savePatch() {
+  const current = $("preset").value.startsWith("patch:") ? $("preset").value.slice(6) : "";
+  const name = prompt("Name this patch", current || "My patch")?.trim();
+  if (!name) return;
+  const patches = loadPatches();
+  patches[name] = `# ${name} (saved from the workshop ${new Date().toISOString().slice(0, 10)})\n${presetText()}`;
+  if (!storePatches(patches)) {
+    alert("This browser would not save it (private mode?). Use Copy or Download instead.");
+    return;
+  }
+  refreshPatchOptions(name);
+}
+
+function deletePatch() {
+  const v = $("preset").value;
+  if (!v.startsWith("patch:")) return alert("Pick one of My patches to delete.");
+  const name = v.slice(6);
+  if (!confirm(`Delete "${name}"?`)) return;
+  const patches = loadPatches();
+  delete patches[name];
+  storePatches(patches);
+  refreshPatchOptions();
+}
+
+function downloadPatch() {
+  const v = $("preset").value;
+  const name = v.startsWith("patch:") ? v.slice(6) : "patch";
+  const blob = new Blob([`# ${name}\n${presetText()}`], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${name.replace(/[^a-z0-9_-]+/gi, "_").toLowerCase()}.preset`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 async function selectPreset(file) {
+  if (file.startsWith("patch:")) {
+    const text = loadPatches()[file.slice(6)];
+    if (text) applyPresetText(text);
+    return;
+  }
   if (file === "__last") {
     let text = null;
     try {
@@ -459,6 +556,8 @@ function buildKeyboard() {
   const kb = $("keyboard");
   kb.innerHTML = "";
   const base = 60 + 12 * state.octave - 12; // two octaves from C3 (+ octave shift)
+  const name = (n) => `C${Math.floor(n / 12) - 1}`;
+  if ($("octLabel")) $("octLabel").textContent = `${name(base)}–${name(base + 24)}`;
   const whites = [0, 2, 4, 5, 7, 9, 11];
   let whiteIndex = 0;
   const totalWhites = 15;
@@ -477,7 +576,15 @@ function buildKeyboard() {
   }
 }
 
+function shiftOctave(d) {
+  [...held.keys()].forEach(noteOff); // never strand a held note
+  state.octave = Math.max(-3, Math.min(3, state.octave + d));
+  buildKeyboard();
+}
+
 function keyboardEvents() {
+  $("octDown").addEventListener("click", () => shiftOctave(-1));
+  $("octUp").addEventListener("click", () => shiftOctave(1));
   const kb = $("keyboard");
   const noteAt = (e) => e.target.closest?.(".key")?.dataset.note;
   kb.addEventListener("pointerdown", (e) => {
@@ -501,8 +608,7 @@ function keyboardEvents() {
     if (e.repeat || e.target.closest?.("input,select,textarea")) return;
     const k = e.key.toLowerCase();
     if (k === "z" || k === "x") {
-      state.octave = Math.max(-2, Math.min(2, state.octave + (k === "x" ? 1 : -1)));
-      buildKeyboard();
+      shiftOctave(k === "x" ? 1 : -1);
       return;
     }
     const i = KEYMAP.indexOf(k);
@@ -527,6 +633,7 @@ async function boot() {
       /* convenience */
     }
     if (lastPattern && [...$("pattern").options].some((o) => o.value === lastPattern)) $("pattern").value = lastPattern;
+    refreshPatchOptions();
     await selectPreset($("preset").value);
     await selectPattern($("pattern").value);
   } catch (err) {
@@ -559,6 +666,9 @@ async function boot() {
     $("mute").setAttribute("aria-pressed", String(state.muted));
     setVolume();
   });
+  $("save").addEventListener("click", savePatch);
+  $("delete").addEventListener("click", deletePatch);
+  $("download").addEventListener("click", downloadPatch);
   $("copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(presetText());
@@ -567,7 +677,7 @@ async function boot() {
       $("presetText").select();
       $("copy").textContent = "Select + copy below";
     }
-    setTimeout(() => ($("copy").textContent = "Copy preset"), 1600);
+    setTimeout(() => ($("copy").textContent = "Copy"), 1600);
   });
 }
 

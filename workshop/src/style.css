@@ -104,3 +104,12 @@ canvas { width: 100%; background: var(--panel-2); border-radius: 6px; display: b
 .metric .d { font-size: 11px; color: var(--muted); }
 .agent-charts { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 #harmonics, #bands { height: 120px; }
+
+.stepper { display: flex; gap: 6px; align-items: center; }
+.stepper button { min-width: 44px; min-height: 40px; padding: 4px 8px; }
+.stepper b { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+@media (pointer: coarse) {
+  input[type="range"] { min-height: 40px; }
+  .key.black { width: calc(100% / 15 * 0.7); }
+}
