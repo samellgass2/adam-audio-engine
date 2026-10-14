@@ -1,46 +1,76 @@
-// Adam Workshop — main thread. Builds the UI from the engine's own parameter
-// contract and talks to the AudioWorklet. A non-rendering "mirror" instance of
-// the same WASM answers every mapping/parsing question (normalized<->physical,
-// presets, pattern tempo), so no synth logic is re-implemented in JavaScript.
+// Adam Workshop — main thread. A tiny DAW over the shared C++ engine:
+// layers (synth or drum kit), a piano roll per layer, step entry, a
+// key-locked keyboard and drum pads, live meters and "what the agent sees".
+//
+// The engine (WASM, in the AudioWorklet) makes every sound and plays every
+// pattern. This thread owns the editable notes of each layer and turns them
+// into pattern text for the engine. A non-rendering mirror instance of the
+// same WASM per instrument kind answers parameter mapping / preset / tempo
+// questions, so no synth logic is re-implemented in JavaScript.
+import { PianoRoll, DRUM_ROWS, noteName } from "./pianoroll.js";
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+const KIND = { synth: 0, drums: 1 };
+const MAX_LAYERS = 5;
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALES = {
+  chromatic: ["Chromatic (piano)", null],
+  major: ["Major", [0, 2, 4, 5, 7, 9, 11]],
+  minor: ["Minor", [0, 2, 3, 5, 7, 8, 10]],
+  majpent: ["Major pentatonic", [0, 2, 4, 7, 9]],
+  minpent: ["Minor pentatonic", [0, 3, 5, 7, 10]],
+  dorian: ["Dorian", [0, 2, 3, 5, 7, 9, 10]],
+  mixolydian: ["Mixolydian", [0, 2, 4, 5, 7, 9, 10]],
+  blues: ["Blues", [0, 3, 5, 6, 7, 10]],
+};
 
 const state = {
   wasmBytes: null,
-  mirror: null, // { w, s }
-  params: [],
-  controls: new Map(), // index -> { set(physical) }
+  w: null, // the main-thread WASM exports
+  mirrors: {}, // kind -> synth handle (never rendered)
+  paramsByKind: {}, // kind -> param contract
+  controls: new Map(),
   ctx: null,
   node: null,
   gain: null,
   analyser: null,
   playing: false,
   loop: true,
-  lengthBeats: 0,
+  lengthBeats: 16,
+  bpm: 100,
   muted: false,
   octave: 0,
   peakHold: 0,
-  // looper: layer 0 = the backing pattern (the clock); 1..4 = recorded layers
-  layers: [{ name: "Backing pattern", presetText: "", muted: false, recording: false, text: "", notes: 0 }],
+  keyRoot: 0,
+  keyScale: "chromatic",
+  presets: [],
+  patterns: [],
+  // layer 0 = the backing pattern (and the loop's clock)
+  layers: [{ name: "Backing", kind: "synth", presetText: "", presetName: "", muted: false, recording: false, notes: [] }],
   selected: 0,
+  roll: null,
 };
-const MAX_LAYERS = 5;
 
-// ---------------------------------------------------------------- mirror
-function mirrorText(text) {
-  const { w, s } = state.mirror;
+const layer = () => state.layers[state.selected];
+const kind = () => layer().kind;
+const mirror = () => state.mirrors[kind()];
+const params = () => state.paramsByKind[kind()];
+
+// ---------------------------------------------------------------- engine
+function writeText(handle, text) {
+  const w = state.w;
   const bytes = enc.encode(text);
-  const ptr = w.adam_text_buffer(s, bytes.length + 1);
+  const ptr = w.adam_text_buffer(handle, bytes.length + 1);
   const mem = new Uint8Array(w.memory.buffer, ptr, bytes.length + 1);
   mem.set(bytes);
   mem[bytes.length] = 0;
   return ptr;
 }
 
-function cString(w, ptr) {
-  const mem = new Uint8Array(w.memory.buffer);
+function cString(ptr) {
+  const mem = new Uint8Array(state.w.memory.buffer);
   let end = ptr;
   while (mem[end]) end++;
   return dec.decode(mem.subarray(ptr, end));
@@ -51,49 +81,46 @@ async function loadEngine() {
   if (!res.ok) throw new Error(`adam_synth.wasm: HTTP ${res.status}`);
   state.wasmBytes = await res.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(state.wasmBytes, {});
-  const w = instance.exports;
-  w._initialize?.();
-  state.mirror = { w, s: w.adam_synth_create(48000) };
-  state.params = JSON.parse(cString(w, w.adam_params_json()));
+  state.w = instance.exports;
+  state.w._initialize?.();
+  for (const [name, type] of Object.entries(KIND)) {
+    state.mirrors[name] = state.w.adam_instrument_create(type, 48000);
+    state.paramsByKind[name] = JSON.parse(cString(state.w.adam_instrument_params_json(type)));
+  }
 }
 
-const toPhysical = (i, n) => state.mirror.w.adam_param_to_physical(i, n);
-const toNormalized = (i, v) => state.mirror.w.adam_param_to_normalized(i, v);
-const getParam = (i) => state.mirror.w.adam_synth_get_param(state.mirror.s, i);
+const post = (msg) => state.node?.port.postMessage(msg);
+const toPhysical = (i, n) => state.w.adam_instrument_param_to_physical(KIND[kind()], i, n);
+const toNormalized = (i, v) => state.w.adam_instrument_param_to_normalized(KIND[kind()], i, v);
+const getParam = (i) => state.w.adam_synth_get_param(mirror(), i);
 
 function setParam(i, physical) {
-  const { w, s } = state.mirror;
-  w.adam_synth_set_param(s, i, physical);
-  const v = w.adam_synth_get_param(s, i); // clamped by the engine
-  state.node?.port.postMessage({ type: "param", index: i, value: v, layer: state.selected });
+  state.w.adam_synth_set_param(mirror(), i, physical);
+  const v = getParam(i); // clamped by the engine
+  post({ type: "param", index: i, value: v, layer: state.selected });
   state.controls.get(i)?.set(v);
-  savePreset();
+  rememberSound();
   return v;
 }
 
 function presetText() {
-  return state.params.map((p) => `${p.id} ${+getParam(p.index).toPrecision(6)}`).join("\n") + "\n";
+  return params().map((p) => `${p.id} ${+getParam(p.index).toPrecision(6)}`).join("\n") + "\n";
 }
 
-function applyPresetText(text) {
-  const { w, s } = state.mirror;
-  w.adam_synth_apply_preset(s, mirrorText(text));
-  for (const p of state.params) state.controls.get(p.index)?.set(getParam(p.index));
-  state.node?.port.postMessage({ type: "preset", bytes: enc.encode(text), layer: state.selected });
-  savePreset();
+function applyPresetText(text, name) {
+  state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), text));
+  for (const p of params()) state.controls.get(p.index)?.set(getParam(p.index));
+  post({ type: "preset", bytes: enc.encode(text), layer: state.selected });
+  if (name) layer().presetName = name;
+  rememberSound();
 }
 
-function savePreset() {
+function rememberSound() {
   $("presetText").value = presetText();
-  state.layers[state.selected].presetText = $("presetText").value;
-  try {
-    localStorage.setItem("adam.workshop.preset", $("presetText").value);
-  } catch {
-    /* a convenience only */
-  }
+  layer().presetText = $("presetText").value;
 }
 
-// ------------------------------------------------------------------ UI
+// ------------------------------------------------------------ params UI
 function fmt(p, v) {
   if (p.mapping === "choice") return p.choices[Math.round(v - p.min)] ?? v;
   if (p.unit === "Hz") return v >= 1000 ? `${(v / 1000).toFixed(2)} kHz` : `${v.toFixed(v < 10 ? 2 : 0)} Hz`;
@@ -104,8 +131,9 @@ function fmt(p, v) {
 }
 
 function buildParams() {
+  state.controls.clear();
   const groups = new Map();
-  for (const p of state.params) {
+  for (const p of params()) {
     if (!groups.has(p.group)) groups.set(p.group, []);
     groups.get(p.group).push(p);
   }
@@ -144,7 +172,7 @@ function sliderControl(p) {
 function stepperControl(p) {
   const el = document.createElement("div");
   el.className = "param";
-  const big = p.max - p.min >= 24 ? 12 : 0; // octave jumps for wide ranges
+  const big = p.max - p.min >= 24 ? 12 : 0;
   const steps = [...(big ? [-big] : []), -1, 1, ...(big ? [big] : [])];
   el.innerHTML = `<div class="top"><span>${p.name}</span></div><div class="stepper"></div>`;
   const box = el.querySelector(".stepper");
@@ -184,46 +212,77 @@ function choiceControl(p) {
   return el;
 }
 
-// ------------------------------------------------------------- content
+// ------------------------------------------------------------- patterns
+// Pattern text <-> editable notes. (The engine parses the same text.)
+function parsePattern(text) {
+  const bpm = Number(/^bpm\s+([\d.]+)/m.exec(text)?.[1] || 0);
+  const length = Number(/^length\s+([\d.]+)/m.exec(text)?.[1] || 0);
+  const notes = [];
+  for (const m of text.matchAll(/^note\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)/gm))
+    notes.push({ start: Number(m[1]), dur: Number(m[2]), note: Number(m[3]), vel: Number(m[4]) });
+  return { bpm, length: length || Math.max(0, ...notes.map((n) => n.start + n.dur)), notes };
+}
+
+function patternText(notes, bpm, length) {
+  const lines = ["# written by the Adam workshop", `bpm ${bpm}`, `length ${length}`];
+  for (const n of notes.slice().sort((a, b) => a.start - b.start))
+    lines.push(`note ${n.start.toFixed(4)} ${n.dur.toFixed(4)} ${n.note} ${n.vel}`);
+  return lines.join("\n") + "\n";
+}
+
+// Notes of layer i -> the engine (in phase while playing).
+function sendNotes(i) {
+  const l = state.layers[i];
+  const notes = l.notes.filter((n) => n.start < state.lengthBeats);
+  post({ type: "setNotes", layer: i, notes, bytes: enc.encode(patternText(notes, state.bpm, state.lengthBeats)) });
+}
+
 async function loadIndexes() {
   const [patterns, presets, build] = await Promise.all([
     fetch("./patterns/index.json").then((r) => r.json()),
     fetch("./presets/index.json").then((r) => r.json()),
     fetch("./build.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
   ]);
+  state.patterns = patterns;
+  state.presets = presets;
   $("build").textContent = build.commit ? `build ${build.commit} · ${build.built}` : "local build";
   const ps = $("pattern");
-  for (const p of patterns) ps.add(new Option(p.name, p.file));
-  ps.dataset.purposes = JSON.stringify(Object.fromEntries(patterns.map((p) => [p.file, p.purpose])));
-  const pr = $("preset");
-  for (const p of presets) pr.add(new Option(p.name, p.file));
-  pr.add(new Option("(last session)", "__last"));
+  ps.add(new Option("Empty loop — 4 bars (record into it)", "__empty4"));
+  ps.add(new Option("Empty loop — 8 bars", "__empty8"));
+  for (const p of patterns.filter((p) => p.kind !== "drums")) ps.add(new Option(p.name, p.file));
 }
 
+async function patternFile(file) {
+  if (file.startsWith("__empty")) return `bpm ${state.bpm || 100}\nlength ${file === "__empty8" ? 32 : 16}\n`;
+  return fetch(`./patterns/${file}`).then((r) => r.text());
+}
+
+// The backing pattern sets the loop: its length and tempo, and layer 0's notes.
 async function selectPattern(file) {
-  const text = await fetch(`./patterns/${file}`).then((r) => r.text());
-  const { w, s } = state.mirror;
-  w.adam_seq_load(s, mirrorText(text));
-  const bpm = Math.round(w.adam_seq_pattern_bpm(s));
-  state.lengthBeats = w.adam_seq_length(s);
-  $("bpm").value = bpm;
-  $("bpmval").textContent = `${bpm} bpm`;
-  $("purpose").textContent = JSON.parse($("pattern").dataset.purposes)[file] || "";
-  state.node?.port.postMessage({ type: "pattern", bytes: enc.encode(text) });
-  state.node?.port.postMessage({ type: "bpm", bpm });
-  try {
-    localStorage.setItem("adam.workshop.pattern", file);
-  } catch {
-    /* convenience */
-  }
+  const text = await patternFile(file);
+  const p = parsePattern(text);
+  state.lengthBeats = p.length || 16;
+  state.bpm = Math.round(p.bpm || state.bpm || 100);
+  $("bpm").value = state.bpm;
+  $("bpmval").textContent = `${state.bpm} bpm`;
+  const info = state.patterns.find((x) => x.file === file);
+  $("purpose").textContent = info?.purpose || (file.startsWith("__empty") ? "an empty loop to record into" : "");
+  state.layers[0].notes = p.notes;
+  post({ type: "pattern", notes: p.notes, bytes: enc.encode(patternText(p.notes, state.bpm, state.lengthBeats)) });
+  post({ type: "bpm", bpm: state.bpm });
+  for (let i = 1; i < state.layers.length; i++) sendNotes(i); // keep other layers on the new loop length
+  refreshRoll();
+  renderLayers();
 }
 
-// ------------------------------------------------------------- patches
+// ------------------------------------------------------------- presets
 const PATCH_KEY = "adam.workshop.patches";
 
 function loadPatches() {
   try {
-    return JSON.parse(localStorage.getItem(PATCH_KEY) || "{}");
+    const raw = JSON.parse(localStorage.getItem(PATCH_KEY) || "{}");
+    // older saves were plain synth preset text
+    return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === "string" ? { kind: "synth", text: v } : v]));
   } catch {
     return {};
   }
@@ -238,71 +297,319 @@ function storePatches(patches) {
   }
 }
 
-function refreshPatchOptions(selectName) {
+// The Sound picker lists presets and saved patches for the selected layer's instrument.
+function refreshPresetOptions() {
   const sel = $("preset");
-  sel.querySelector("optgroup[label='My patches']")?.remove();
-  const names = Object.keys(loadPatches()).sort();
-  if (names.length) {
+  sel.innerHTML = "";
+  for (const p of state.presets.filter((p) => p.kind === kind())) sel.add(new Option(p.name, p.file));
+  const mine = Object.entries(loadPatches()).filter(([, v]) => v.kind === kind());
+  if (mine.length) {
     const group = document.createElement("optgroup");
     group.label = "My patches";
-    for (const n of names) group.appendChild(new Option(n, `patch:${n}`));
+    for (const [n] of mine.sort()) group.appendChild(new Option(n, `patch:${n}`));
     sel.appendChild(group);
   }
-  if (selectName) sel.value = `patch:${selectName}`;
+  const current = layer().presetName;
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+  $("presetFor").textContent = layer().name;
+  // the per-layer Load list: patterns for this instrument
+  const lp = $("loadPattern");
+  lp.innerHTML = "";
+  lp.add(new Option("—", ""));
+  for (const p of state.patterns.filter((p) => (p.kind || "synth") === kind())) lp.add(new Option(p.name, p.file));
+}
+
+async function selectPreset(value) {
+  if (value.startsWith("patch:")) {
+    const p = loadPatches()[value.slice(6)];
+    if (p) applyPresetText(p.text, value);
+    return;
+  }
+  applyPresetText(await fetch(`./presets/${value}`).then((r) => r.text()), value);
 }
 
 function savePatch() {
-  const current = $("preset").value.startsWith("patch:") ? $("preset").value.slice(6) : "";
-  const name = prompt("Name this patch", current || "My patch")?.trim();
+  const cur = $("preset").value.startsWith("patch:") ? $("preset").value.slice(6) : "";
+  const name = prompt("Name this patch", cur || (kind() === "drums" ? "My kit" : "My patch"))?.trim();
   if (!name) return;
   const patches = loadPatches();
-  patches[name] = `# ${name} (saved from the workshop ${new Date().toISOString().slice(0, 10)})\n${presetText()}`;
-  if (!storePatches(patches)) {
-    alert("This browser would not save it (private mode?). Use Copy or Download instead.");
-    return;
-  }
-  refreshPatchOptions(name);
+  patches[name] = { kind: kind(), text: `# ${name} (saved ${new Date().toISOString().slice(0, 10)})\n${presetText()}` };
+  if (!storePatches(patches)) return alert("This browser would not save it (private mode?). Use Copy or Download.");
+  layer().presetName = `patch:${name}`;
+  refreshPresetOptions();
 }
 
 function deletePatch() {
   const v = $("preset").value;
   if (!v.startsWith("patch:")) return alert("Pick one of My patches to delete.");
-  const name = v.slice(6);
-  if (!confirm(`Delete "${name}"?`)) return;
+  if (!confirm(`Delete "${v.slice(6)}"?`)) return;
   const patches = loadPatches();
-  delete patches[name];
+  delete patches[v.slice(6)];
   storePatches(patches);
-  refreshPatchOptions();
+  refreshPresetOptions();
 }
 
-function downloadPatch() {
-  const v = $("preset").value;
-  const name = v.startsWith("patch:") ? v.slice(6) : "patch";
-  const blob = new Blob([`# ${name}\n${presetText()}`], { type: "text/plain" });
+function download(name, data, type) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${name.replace(/[^a-z0-9_-]+/gi, "_").toLowerCase()}.preset`;
+  a.href = URL.createObjectURL(new Blob([data], { type }));
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-async function selectPreset(file) {
-  if (file.startsWith("patch:")) {
-    const text = loadPatches()[file.slice(6)];
-    if (text) applyPresetText(text);
-    return;
-  }
-  if (file === "__last") {
-    let text = null;
-    try {
-      text = localStorage.getItem("adam.workshop.preset");
-    } catch {
-      /* convenience */
+// ---------------------------------------------------------------- layers
+function selectLayer(i) {
+  if (i === state.selected || !state.layers[i]) return;
+  releaseAll(); // notes belong to the layer they started on
+  const prevKind = state.layers[state.selected]?.kind;
+  state.selected = i;
+  if (layer().presetText) state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), layer().presetText));
+  if (kind() !== prevKind) buildParams();
+  for (const p of params()) state.controls.get(p.index)?.set(getParam(p.index));
+  $("presetText").value = layer().presetText;
+  refreshPresetOptions();
+  refreshKeyboard();
+  refreshRoll();
+  renderLayers();
+}
+
+async function addLayer(k) {
+  if (state.layers.length >= MAX_LAYERS) return;
+  const count = state.layers.filter((l) => l.kind === k).length + (k === "synth" ? 0 : 1);
+  const preset = state.presets.find((p) => p.kind === k);
+  const text = preset ? await fetch(`./presets/${preset.file}`).then((r) => r.text()) : "";
+  state.layers.push({ name: k === "drums" ? `Drums ${count}` : `Synth ${count}`, kind: k, presetText: "",
+    presetName: preset?.file || "", muted: false, recording: false, notes: [] });
+  post({ type: "addLayer", kind: KIND[k], bytes: enc.encode(text) });
+  // the mirror learns the starting sound, then the layer remembers it
+  state.selected = state.layers.length - 1;
+  state.w.adam_synth_apply_preset(state.mirrors[k], writeText(state.mirrors[k], text));
+  state.layers[state.selected].presetText = presetText();
+  state.selected = -1;
+  selectLayer(state.layers.length - 1);
+  sendNotes(state.layers.length - 1);
+}
+
+function toggleRecord(i) {
+  const l = state.layers[i];
+  if (!l.recording && !state.playing) setPlaying(true); // recording needs the loop running
+  l.recording = !l.recording;
+  if (l.recording) selectLayer(i);
+  post({ type: "record", layer: i, on: l.recording });
+  renderLayers();
+}
+
+function renderLayers() {
+  const box = $("layers");
+  box.innerHTML = "";
+  state.layers.forEach((l, i) => {
+    const row = document.createElement("div");
+    row.className = `layer${i === state.selected ? " selected" : ""}${l.recording ? " recording" : ""}`;
+    const icon = l.kind === "drums" ? "🥁" : "🎹";
+    const info = l.notes.length ? `${l.notes.length} notes` : i === 0 ? "empty loop" : "empty — Rec, or tap the roll";
+    row.innerHTML = `<button class="pick" aria-label="Edit ${l.name}">${i === state.selected ? "●" : "○"}</button>
+      <div class="lname"><b>${icon} ${l.name}</b><span>${info}</span></div>`;
+    const actions = document.createElement("div");
+    actions.className = "lactions";
+    const btn = (label, title, fn, cls = "") => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = title;
+      if (cls) b.className = cls;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fn();
+      });
+      actions.appendChild(b);
+    };
+    btn(l.recording ? "■ Stop rec" : "● Rec", "Record what you play into this layer (overdubs)", () => toggleRecord(i),
+      l.recording ? "rec on" : "rec");
+    btn(l.muted ? "Unmute" : "Mute", "Mute this layer", () => {
+      l.muted = !l.muted;
+      post({ type: "mute", layer: i, on: l.muted });
+      renderLayers();
+    }, l.muted ? "toggle on" : "toggle");
+    row.appendChild(actions);
+    row.addEventListener("click", () => selectLayer(i));
+    box.appendChild(row);
+  });
+  $("addSynth").disabled = $("addDrums").disabled = state.layers.length >= MAX_LAYERS;
+  $("editing").textContent = layer().name;
+  $("rollName").textContent = layer().name;
+}
+
+// ------------------------------------------------------------ piano roll
+function refreshRoll() {
+  state.roll.setLayer({ kind: kind(), notes: layer().notes, lengthBeats: state.lengthBeats });
+  applyScaleToRoll();
+}
+
+function onRollChange(notes) {
+  layer().notes = notes;
+  sendNotes(state.selected);
+  renderLayers();
+}
+
+function stepEntryActive() {
+  return state.roll.stepMode && !state.playing;
+}
+
+// ------------------------------------------------------- keyboard & pads
+const held = new Map(); // pointerId|key -> note
+
+function noteOn(note, id, velocity = 100) {
+  if (held.has(id)) return;
+  held.set(id, note);
+  post({ type: "noteOn", note, velocity, layer: state.selected });
+  document.querySelector(`[data-note="${note}"]`)?.classList.add("down");
+  if (stepEntryActive()) state.roll.addAtCursor(note, velocity); // spell a chord note by note
+}
+
+function noteOff(id) {
+  const note = held.get(id);
+  if (note === undefined) return;
+  held.delete(id);
+  post({ type: "noteOff", note, layer: state.selected });
+  if (![...held.values()].includes(note)) document.querySelector(`[data-note="${note}"]`)?.classList.remove("down");
+}
+
+function releaseAll() {
+  [...held.keys()].forEach(noteOff);
+}
+
+function scaleSteps() {
+  return SCALES[state.keyScale][1];
+}
+
+function applyScaleToRoll() {
+  const steps = scaleSteps();
+  state.roll.setScale(state.keyRoot, steps ? (pc) => steps.includes((pc - state.keyRoot + 12) % 12) : null);
+}
+
+// Chromatic: a piano. A scale: only the scale's notes, as big equal keys.
+function buildKeyboard() {
+  const kb = $("keyboard");
+  kb.innerHTML = "";
+  const steps = scaleSteps();
+  const base = 60 + 12 * state.octave - 12;
+  if (!steps) {
+    kb.className = "keyboard";
+    const name = (n) => `C${Math.floor(n / 12) - 1}`;
+    $("octLabel").textContent = `${name(base)}–${name(base + 24)}`;
+    const whites = [0, 2, 4, 5, 7, 9, 11];
+    let whiteIndex = 0;
+    for (let n = base; n <= base + 24; n++) {
+      const el = document.createElement("div");
+      el.dataset.note = n;
+      if (whites.includes(n % 12)) {
+        el.className = "key";
+        whiteIndex++;
+      } else {
+        el.className = "key black";
+        el.style.left = `calc(${(whiteIndex / 15) * 100}% - ${(100 / 15) * 0.31}%)`;
+      }
+      kb.appendChild(el);
     }
-    if (text) applyPresetText(text);
     return;
   }
-  applyPresetText(await fetch(`./presets/${file}`).then((r) => r.text()));
+  kb.className = "keyboard scale";
+  const rootNote = base + state.keyRoot;
+  const notes = [];
+  for (let o = 0; o < 2; o++) for (const s of steps) notes.push(rootNote + 12 * o + s);
+  notes.push(rootNote + 24);
+  $("octLabel").textContent = `${noteName(notes[0])}–${noteName(notes[notes.length - 1])}`;
+  for (const n of notes) {
+    const el = document.createElement("div");
+    el.className = `key${(n - state.keyRoot) % 12 === 0 ? " root" : ""}`;
+    el.dataset.note = n;
+    el.textContent = NOTE_NAMES[n % 12];
+    kb.appendChild(el);
+  }
+}
+
+function buildPads() {
+  const pads = $("pads");
+  pads.innerHTML = "";
+  // top row: hats and clap; middle: toms and rim; bottom: kick, snare
+  const order = [42, 46, 39, 48, 45, 41, 37, 38, 36];
+  for (const note of order) {
+    const el = document.createElement("div");
+    el.className = "pad";
+    el.dataset.note = note;
+    el.textContent = DRUM_ROWS.find(([n]) => n === note)[1];
+    pads.appendChild(el);
+  }
+}
+
+function refreshKeyboard() {
+  const drums = kind() === "drums";
+  $("keyboard").hidden = drums;
+  $("pads").hidden = !drums;
+  $("keyControls").hidden = drums;
+  $("playTitle").textContent = drums ? "Drum pads" : "Play it";
+  if (!drums) buildKeyboard();
+}
+
+function shiftOctave(d) {
+  releaseAll();
+  state.octave = Math.max(-3, Math.min(3, state.octave + d));
+  buildKeyboard();
+}
+
+function pointerPlay(container, selector) {
+  const at = (e) => {
+    const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(selector);
+    return el && container.contains(el) ? el : null;
+  };
+  container.addEventListener("pointerdown", (e) => {
+    const el = at(e);
+    if (!el) return;
+    container.setPointerCapture(e.pointerId);
+    // pads: where you hit sets the velocity (top = loud), like a real pad
+    let vel = 100;
+    if (selector === ".pad") {
+      const r = el.getBoundingClientRect();
+      vel = Math.round(127 - ((e.clientY - r.top) / r.height) * 70);
+    }
+    noteOn(Number(el.dataset.note), `p${e.pointerId}`, vel);
+  });
+  container.addEventListener("pointermove", (e) => {
+    if (!held.has(`p${e.pointerId}`) || selector === ".pad") return;
+    const el = at(e);
+    if (el && Number(el.dataset.note) !== held.get(`p${e.pointerId}`)) {
+      noteOff(`p${e.pointerId}`);
+      noteOn(Number(el.dataset.note), `p${e.pointerId}`);
+    }
+  });
+  for (const t of ["pointerup", "pointercancel", "lostpointercapture"])
+    container.addEventListener(t, (e) => noteOff(`p${e.pointerId}`));
+}
+
+function keyboardEvents() {
+  $("octDown").addEventListener("click", () => shiftOctave(-1));
+  $("octUp").addEventListener("click", () => shiftOctave(1));
+  pointerPlay($("keyboard"), ".key");
+  pointerPlay($("pads"), ".pad");
+  const KEYMAP = "awsedftgyhujk"; // C C# D ... C (chromatic), or scale degrees in a scale
+  const DRUMKEYS = { a: 36, s: 38, d: 42, f: 46, g: 39, h: 41, j: 45, k: 48, l: 37 };
+  window.addEventListener("keydown", (e) => {
+    if (e.repeat || e.target.closest?.("input,select,textarea")) return;
+    const k = e.key.toLowerCase();
+    if (kind() === "drums") {
+      if (DRUMKEYS[k]) noteOn(DRUMKEYS[k], `k${k}`, 110);
+      return;
+    }
+    if (k === "z" || k === "x") return shiftOctave(k === "x" ? 1 : -1);
+    const i = KEYMAP.indexOf(k);
+    if (i < 0) return;
+    const steps = scaleSteps();
+    const note = steps
+      ? 60 + 12 * state.octave + state.keyRoot + 12 * Math.floor(i / steps.length) + steps[i % steps.length]
+      : 60 + 12 * state.octave + i;
+    noteOn(note, `k${k}`);
+  });
+  window.addEventListener("keyup", (e) => noteOff(`k${e.key.toLowerCase()}`));
+  window.addEventListener("blur", releaseAll);
 }
 
 // ---------------------------------------------------------------- audio
@@ -323,18 +630,16 @@ async function startAudio() {
   node.connect(gain).connect(ctx.destination);
   Object.assign(state, { ctx, node, analyser, gain });
   setVolume();
-
   await new Promise((resolve) => {
     node.port.onmessage = (e) => {
       if (e.data.type === "ready") resolve();
-      onWorkletMessage(e.data);
     };
   });
   node.port.onmessage = (e) => onWorkletMessage(e.data);
-  // bring the audio engine to the UI's state
-  node.port.postMessage({ type: "preset", bytes: enc.encode(presetText()), layer: 0 });
+  // bring the engine to the UI's state
+  post({ type: "preset", bytes: enc.encode(state.layers[0].presetText), layer: 0 });
   await selectPattern($("pattern").value);
-  node.port.postMessage({ type: "loop", on: state.loop });
+  post({ type: "loop", on: state.loop });
   await ctx.resume();
   $("app").classList.remove("locked");
   $("start").textContent = `Audio on · ${ctx.sampleRate / 1000} kHz`;
@@ -342,24 +647,83 @@ async function startAudio() {
   requestAnimationFrame(draw);
 }
 
-// ------------------------------------------------- what the agent sees
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-let lastAnalysis = null;
+function onWorkletMessage(m) {
+  if (m.type === "layerPattern") {
+    const l = state.layers[m.layer];
+    if (l) {
+      l.notes = m.notes || [];
+      if (m.layer === state.selected) refreshRoll();
+      renderLayers();
+    }
+    return;
+  }
+  if (m.type === "snapshot") {
+    analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096)); // the most recent ~85 ms
+    return;
+  }
+  if (m.type !== "meter") return;
+  const db = (x) => (x > 1e-6 ? 20 * Math.log10(x) : -120);
+  const h = (x) => `${Math.max(0, Math.min(100, ((db(x) + 60) / 60) * 100))}%`;
+  $("mL").style.height = h(m.peakL);
+  $("mR").style.height = h(m.peakR);
+  $("rL").style.height = h(m.rmsL);
+  $("rR").style.height = h(m.rmsR);
+  state.peakHold = Math.max(Math.max(m.peakL, m.peakR), state.peakHold * 0.97);
+  $("peakdb").textContent = db(state.peakHold) < -100 ? "−∞" : db(state.peakHold).toFixed(1);
+  $("grdb").textContent = m.grDb.toFixed(1);
+  $("voices").textContent = m.voices;
+  const unsafe = m.backstop > 0 || m.nanResets > 0;
+  $("safety").className = unsafe ? "bad" : "ok";
+  $("safety").textContent = unsafe ? `safety stage engaged (backstop ${m.backstop}, NaN resets ${m.nanResets})` : "output safe";
+  $("beatbar").style.width = `${((m.beat % state.lengthBeats) / state.lengthBeats) * 100}%`;
+  state.roll.playhead = state.playing ? m.beat : -1;
+  if (state.playing && !m.playing) setPlaying(false); // a non-looping pattern ended
+  if (m.recording) m.recording.forEach((r, i) => {
+    if (state.layers[i] && state.layers[i].recording !== r) {
+      state.layers[i].recording = r;
+      renderLayers();
+    }
+  });
+}
 
+function setPlaying(on) {
+  state.playing = on;
+  $("play").textContent = on ? "❚❚ Stop" : "▶ Play";
+  post({ type: "play", on });
+  if (!on) {
+    post({ type: "rewind" });
+    state.roll.playhead = -1;
+  }
+  updateStepUi();
+}
+
+function updateStepUi() {
+  const on = state.roll.stepMode;
+  $("stepMode").setAttribute("aria-pressed", String(on));
+  $("stepBack").disabled = $("stepNext").disabled = !on;
+  $("stepMode").textContent = on ? (state.playing ? "✎ Step entry (stop to write)" : "✎ Step entry on") : "✎ Step entry";
+  state.roll.draw();
+}
+
+function setVolume() {
+  const v = Number($("volume").value);
+  $("volval").textContent = `${Math.round(v * 100)}%`;
+  if (state.gain) state.gain.gain.setTargetAtTime(state.muted ? 0 : v * v, state.ctx.currentTime, 0.02);
+}
+
+// ------------------------------------------------- what the agent sees
 function analyzeSnapshot(l, r) {
-  const { w } = state.mirror;
+  const w = state.w;
   const MAX = 16384;
   const input = new Float32Array(w.memory.buffer, w.adam_analysis_input(), 2 * MAX);
   input.set(l, 0);
   input.set(r, MAX);
   const o = new Float32Array(w.memory.buffer, w.adam_analyze(l.length, state.ctx.sampleRate), 29);
-  const a = {
+  renderAnalysis({
     peakDb: o[0], rmsDb: o[1], crestDb: o[2], dc: o[3], centroidHz: o[4], rolloffHz: o[5], flatness: o[6],
     f0Hz: o[7], f0Confidence: o[8], f0Midi: o[9], inharmonicDb: o[10], bands: Array.from(o.subarray(11, 15)),
     stereo: o[15], harmonics: Array.from(o.subarray(17, 17 + o[16])),
-  };
-  lastAnalysis = a;
-  renderAnalysis(a);
+  });
 }
 
 const hz = (f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${Math.round(f)} Hz`);
@@ -373,18 +737,12 @@ function renderAnalysis(a) {
     if (a.f0Hz > 0 && a.f0Confidence > 0.6) {
       const midi = Math.round(a.f0Midi);
       const cents = Math.round((a.f0Midi - midi) * 100);
-      metrics.push([
-        "Pitch (YIN)",
-        `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1} ${cents >= 0 ? "+" : ""}${cents}¢`,
-        `${a.f0Hz.toFixed(1)} Hz · confidence ${(a.f0Confidence * 100).toFixed(0)}%`,
-      ]);
-      metrics.push([
-        "Between-harmonic energy",
-        `${a.inharmonicDb.toFixed(1)} dB`,
-        "aliasing + noise on a HELD SINGLE note (lower = cleaner); chords and note changes raise it",
-      ]);
+      metrics.push(["Pitch (YIN)", `${noteName(midi)} ${cents >= 0 ? "+" : ""}${cents}¢`,
+        `${a.f0Hz.toFixed(1)} Hz · confidence ${(a.f0Confidence * 100).toFixed(0)}%`]);
+      metrics.push(["Between-harmonic energy", `${a.inharmonicDb.toFixed(1)} dB`,
+        "aliasing + noise on a HELD SINGLE note (lower = cleaner); chords and note changes raise it"]);
     } else {
-      metrics.push(["Pitch (YIN)", "—", "no single pitch (a chord or noise)"]);
+      metrics.push(["Pitch (YIN)", "—", "no single pitch (a chord, drums or noise)"]);
     }
     metrics.push(["Brightness (centroid)", hz(a.centroidHz), "where the spectrum's weight sits; higher = brighter"]);
     metrics.push(["Rolloff (85% energy)", hz(a.rolloffHz), "85% of the energy is below this"]);
@@ -421,184 +779,17 @@ function drawBars(canvas, values, label, floorDb) {
   });
 }
 
-// ---------------------------------------------------------------- looper
-function selectLayer(i) {
-  if (i === state.selected || !state.layers[i]) return;
-  [...held.keys()].forEach(noteOff); // notes belong to the layer they started on
-  state.selected = i;
-  const { w, s } = state.mirror;
-  w.adam_synth_apply_preset(s, mirrorText(state.layers[i].presetText));
-  for (const p of state.params) state.controls.get(p.index)?.set(getParam(p.index));
-  $("presetText").value = state.layers[i].presetText;
-  renderLayers();
-}
-
-function addLayer() {
-  if (state.layers.length >= MAX_LAYERS) return;
-  const presetTextNow = presetText(); // a new layer starts from the current sound
-  state.layers.push({ name: `Layer ${state.layers.length}`, presetText: presetTextNow, muted: false,
-    recording: false, text: "", notes: 0 });
-  state.node?.port.postMessage({ type: "addLayer", bytes: enc.encode(presetTextNow) });
-  selectLayer(state.layers.length - 1);
-}
-
-function toggleRecord(i) {
-  const layer = state.layers[i];
-  if (!layer.recording && !state.playing) setPlaying(true); // recording needs the loop running
-  layer.recording = !layer.recording;
-  if (layer.recording) selectLayer(i);
-  state.node?.port.postMessage({ type: "record", layer: i, on: layer.recording });
-  renderLayers();
-}
-
-function patternToMidi(text) {
-  const bpm = Number(/^bpm\s+([\d.]+)/m.exec(text)?.[1] || 120);
-  const length = Number(/^length\s+([\d.]+)/m.exec(text)?.[1] || 16);
-  const ppq = 480;
-  const ev = [];
-  for (const m of text.matchAll(/^note\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)/gm)) {
-    const [s, d, n, v] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
-    ev.push([Math.round(s * ppq), 1, n, v], [Math.round(Math.min(s + d, length) * ppq), 0, n, 0]);
-  }
-  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const vlq = (x) => {
-    const out = [x & 0x7f];
-    while ((x >>= 7)) out.unshift((x & 0x7f) | 0x80);
-    return out;
-  };
-  const tempo = Math.round(60000000 / bpm);
-  const track = [0, 0xff, 0x51, 3, (tempo >> 16) & 255, (tempo >> 8) & 255, tempo & 255];
-  let last = 0;
-  for (const [t, on, n, v] of ev) {
-    track.push(...vlq(t - last), on ? 0x90 : 0x80, n, on ? v : 64);
-    last = t;
-  }
-  track.push(...vlq(Math.max(0, Math.round(length * ppq) - last)), 0xff, 0x2f, 0);
-  const u32 = (x) => [(x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255];
-  return new Uint8Array([0x4d, 0x54, 0x68, 0x64, ...u32(6), 0, 0, 0, 1, (ppq >> 8) & 255, ppq & 255,
-    0x4d, 0x54, 0x72, 0x6b, ...u32(track.length), ...track]);
-}
-
-function exportLayer(i, kind) {
-  const layer = state.layers[i];
-  if (!layer.text) return;
-  const data = kind === "mid" ? patternToMidi(layer.text) : layer.text;
-  const blob = new Blob([data], { type: kind === "mid" ? "audio/midi" : "text/plain" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${layer.name.replace(/\s+/g, "_").toLowerCase()}.${kind === "mid" ? "mid" : "pat"}`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
-function renderLayers() {
-  const box = $("layers");
-  box.innerHTML = "";
-  state.layers.forEach((layer, i) => {
-    const row = document.createElement("div");
-    row.className = `layer${i === state.selected ? " selected" : ""}${layer.recording ? " recording" : ""}`;
-    const info = i === 0 ? $("pattern").selectedOptions[0]?.text || "pattern" : layer.notes ? `${layer.notes} notes` : "empty — press Rec and play";
-    row.innerHTML = `<button class="pick" aria-label="Edit ${layer.name}">${i === state.selected ? "●" : "○"}</button>
-      <div class="lname"><b>${layer.name}</b><span>${info}</span></div>`;
-    const actions = document.createElement("div");
-    actions.className = "lactions";
-    const btn = (label, title, fn, cls = "") => {
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.title = title;
-      if (cls) b.className = cls;
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        fn();
-      });
-      actions.appendChild(b);
-    };
-    if (i > 0) btn(layer.recording ? "■ Stop rec" : "● Rec", "Record what you play into this layer (overdubs)", () => toggleRecord(i), layer.recording ? "rec on" : "rec");
-    btn(layer.muted ? "Unmute" : "Mute", "Mute this layer", () => {
-      layer.muted = !layer.muted;
-      state.node?.port.postMessage({ type: "mute", layer: i, on: layer.muted });
-      renderLayers();
-    }, layer.muted ? "toggle on" : "toggle");
-    if (i > 0) {
-      btn("Clear", "Erase this layer's notes", () => {
-        if (layer.recording) toggleRecord(i);
-        state.node?.port.postMessage({ type: "clear", layer: i });
-      });
-      if (layer.text) {
-        btn(".mid", "Download this layer as MIDI (for Logic)", () => exportLayer(i, "mid"));
-        btn(".pat", "Download this layer as an engine pattern", () => exportLayer(i, "pat"));
-      }
-    }
-    row.appendChild(actions);
-    row.addEventListener("click", () => selectLayer(i));
-    box.appendChild(row);
-  });
-  $("addLayer").disabled = state.layers.length >= MAX_LAYERS;
-  $("editing").textContent = state.layers[state.selected].name;
-}
-
-function onWorkletMessage(m) {
-  if (m.type === "layerPattern") {
-    const layer = state.layers[m.layer];
-    if (layer) {
-      layer.text = m.text;
-      layer.notes = m.notes;
-      renderLayers();
-    }
-    return;
-  }
-  if (m.type === "snapshot") {
-    // the most recent ~85 ms: short enough to hold one note of a melody
-    analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096));
-    return;
-  }
-  if (m.type !== "meter") return;
-  const db = (x) => (x > 1e-6 ? 20 * Math.log10(x) : -120);
-  const h = (x) => `${Math.max(0, Math.min(100, ((db(x) + 60) / 60) * 100))}%`;
-  $("mL").style.height = h(m.peakL);
-  $("mR").style.height = h(m.peakR);
-  $("rL").style.height = h(m.rmsL);
-  $("rR").style.height = h(m.rmsR);
-  const pk = Math.max(m.peakL, m.peakR);
-  state.peakHold = Math.max(pk, state.peakHold * 0.97);
-  $("peakdb").textContent = db(state.peakHold) < -100 ? "−∞" : db(state.peakHold).toFixed(1);
-  $("grdb").textContent = m.grDb.toFixed(1);
-  $("voices").textContent = m.voices;
-  const unsafe = m.backstop > 0 || m.nanResets > 0;
-  $("safety").className = unsafe ? "bad" : "ok";
-  $("safety").textContent = unsafe
-    ? `safety stage engaged (backstop ${m.backstop}, NaN resets ${m.nanResets})`
-    : "output safe";
-  if (state.lengthBeats > 0) $("beatbar").style.width = `${((m.beat % state.lengthBeats) / state.lengthBeats) * 100}%`;
-  if (state.playing && !m.playing) setPlaying(false); // a non-looping pattern ended
-  if (m.recording) m.recording.forEach((r, i) => {
-    if (state.layers[i] && state.layers[i].recording !== r) {
-      state.layers[i].recording = r;
-      renderLayers();
-    }
-  });
-}
-
-function setPlaying(on) {
-  state.playing = on;
-  $("play").textContent = on ? "❚❚ Stop" : "▶ Play";
-  state.node?.port.postMessage({ type: "play", on });
-  if (!on) state.node?.port.postMessage({ type: "rewind" });
-}
-
-function setVolume() {
-  const v = Number($("volume").value);
-  $("volval").textContent = `${Math.round(v * 100)}%`;
-  // listening level only (the synth's own Master is a parameter)
-  if (state.gain) state.gain.gain.setTargetAtTime(state.muted ? 0 : v * v, state.ctx.currentTime, 0.02);
-}
-
 // ---------------------------------------------------------------- scopes
-function draw() {
+let lastRollDraw = 0;
+function draw(t) {
   const a = state.analyser;
   if (a) {
     drawSpectrum(a);
     drawScope(a);
+  }
+  if (state.playing && t - lastRollDraw > 33) {
+    state.roll.draw(); // move the playhead
+    lastRollDraw = t;
   }
   requestAnimationFrame(draw);
 }
@@ -654,7 +845,6 @@ function drawScope(a) {
   const { g, w, h } = canvasCtx($("scope"));
   const buf = new Float32Array(a.fftSize);
   a.getFloatTimeDomainData(buf);
-  // trigger on a rising zero crossing for a stable picture
   let start = 0;
   for (let i = 1; i < buf.length / 2; i++) if (buf[i - 1] < 0 && buf[i] >= 0) { start = i; break; }
   const span = Math.min(1024, buf.length - start);
@@ -669,110 +859,32 @@ function drawScope(a) {
   g.stroke();
 }
 
-// -------------------------------------------------------------- keyboard
-const KEYMAP = "awsedftgyhujk"; // C C# D D# E F F# G G# A A# B C
-const held = new Map(); // pointerId|key -> note
-
-function noteOn(note, id) {
-  if (held.has(id)) return;
-  held.set(id, note);
-  state.node?.port.postMessage({ type: "noteOn", note, velocity: 100, layer: state.selected });
-  document.querySelector(`.key[data-note="${note}"]`)?.classList.add("down");
-}
-
-function noteOff(id) {
-  const note = held.get(id);
-  if (note === undefined) return;
-  held.delete(id);
-  state.node?.port.postMessage({ type: "noteOff", note, layer: state.selected });
-  if (![...held.values()].includes(note)) document.querySelector(`.key[data-note="${note}"]`)?.classList.remove("down");
-}
-
-function buildKeyboard() {
-  const kb = $("keyboard");
-  kb.innerHTML = "";
-  const base = 60 + 12 * state.octave - 12; // two octaves from C3 (+ octave shift)
-  const name = (n) => `C${Math.floor(n / 12) - 1}`;
-  if ($("octLabel")) $("octLabel").textContent = `${name(base)}–${name(base + 24)}`;
-  const whites = [0, 2, 4, 5, 7, 9, 11];
-  let whiteIndex = 0;
-  const totalWhites = 15;
-  for (let n = base; n <= base + 24; n++) {
-    const pc = n % 12;
-    const el = document.createElement("div");
-    el.dataset.note = n;
-    if (whites.includes(pc)) {
-      el.className = "key";
-      whiteIndex++;
-    } else {
-      el.className = "key black";
-      el.style.left = `calc(${(whiteIndex / totalWhites) * 100}% - ${(100 / totalWhites) * 0.31}%)`;
-    }
-    kb.appendChild(el);
-  }
-}
-
-function shiftOctave(d) {
-  [...held.keys()].forEach(noteOff); // never strand a held note
-  state.octave = Math.max(-3, Math.min(3, state.octave + d));
-  buildKeyboard();
-}
-
-function keyboardEvents() {
-  $("octDown").addEventListener("click", () => shiftOctave(-1));
-  $("octUp").addEventListener("click", () => shiftOctave(1));
-  const kb = $("keyboard");
-  const noteAt = (e) => e.target.closest?.(".key")?.dataset.note;
-  kb.addEventListener("pointerdown", (e) => {
-    const n = noteAt(e);
-    if (n === undefined) return;
-    kb.setPointerCapture(e.pointerId);
-    noteOn(Number(n), `p${e.pointerId}`);
-  });
-  kb.addEventListener("pointermove", (e) => {
-    if (!held.has(`p${e.pointerId}`)) return;
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const n = el?.closest?.(".key")?.dataset.note;
-    if (n !== undefined && Number(n) !== held.get(`p${e.pointerId}`)) {
-      noteOff(`p${e.pointerId}`);
-      noteOn(Number(n), `p${e.pointerId}`);
-    }
-  });
-  for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) kb.addEventListener(t, (e) => noteOff(`p${e.pointerId}`));
-
-  window.addEventListener("keydown", (e) => {
-    if (e.repeat || e.target.closest?.("input,select,textarea")) return;
-    const k = e.key.toLowerCase();
-    if (k === "z" || k === "x") {
-      shiftOctave(k === "x" ? 1 : -1);
-      return;
-    }
-    const i = KEYMAP.indexOf(k);
-    if (i >= 0) noteOn(60 + 12 * state.octave + i, `k${k}`);
-  });
-  window.addEventListener("keyup", (e) => noteOff(`k${e.key.toLowerCase()}`));
-  window.addEventListener("blur", () => [...held.keys()].forEach(noteOff));
-}
-
 // ------------------------------------------------------------------ boot
 async function boot() {
   try {
     await loadEngine();
     await loadIndexes();
+    state.roll = new PianoRoll($("roll"), {
+      onChange: onRollChange,
+      onSelect: ({ audition }) => {
+        // tapping a note or a row label plays it, so editing is by ear
+        if (audition === undefined) return;
+        post({ type: "noteOn", note: audition, velocity: 90, layer: state.selected });
+        setTimeout(() => post({ type: "noteOff", note: audition, layer: state.selected }), 220);
+      },
+    });
+    for (let i = 0; i < 12; i++) $("keyRoot").add(new Option(NOTE_NAMES[i], i));
+    for (const [k, [label]] of Object.entries(SCALES)) $("keyScale").add(new Option(label, k));
     buildParams();
-    buildKeyboard();
+    buildPads();
     keyboardEvents();
-    let lastPattern = null;
-    try {
-      lastPattern = localStorage.getItem("adam.workshop.pattern");
-    } catch {
-      /* convenience */
-    }
-    if (lastPattern && [...$("pattern").options].some((o) => o.value === lastPattern)) $("pattern").value = lastPattern;
-    refreshPatchOptions();
+    // the backing layer starts on the first synth preset
+    const first = state.presets.find((p) => p.kind === "synth");
+    state.layers[0].presetName = first.file;
+    await selectPreset(first.file);
+    refreshPresetOptions();
+    refreshKeyboard();
     renderLayers();
-    $("addLayer").addEventListener("click", addLayer);
-    await selectPreset($("preset").value);
     await selectPattern($("pattern").value);
   } catch (err) {
     $("purpose").textContent = `Engine failed to load: ${err.message}`;
@@ -786,18 +898,71 @@ async function boot() {
     state.loop = !state.loop;
     $("loop").classList.toggle("on", state.loop);
     $("loop").setAttribute("aria-pressed", String(state.loop));
-    state.node?.port.postMessage({ type: "loop", on: state.loop });
+    post({ type: "loop", on: state.loop });
   });
   $("panic").addEventListener("click", () => {
     setPlaying(false);
-    state.node?.port.postMessage({ type: "panic" });
+    post({ type: "panic" });
   });
   $("bpm").addEventListener("input", () => {
-    $("bpmval").textContent = `${$("bpm").value} bpm`;
-    state.node?.port.postMessage({ type: "bpm", bpm: Number($("bpm").value) });
+    state.bpm = Number($("bpm").value);
+    $("bpmval").textContent = `${state.bpm} bpm`;
+    post({ type: "bpm", bpm: state.bpm });
   });
-  $("pattern").addEventListener("change", () => selectPattern($("pattern").value).then(renderLayers));
+  $("pattern").addEventListener("change", () => selectPattern($("pattern").value));
   $("preset").addEventListener("change", () => selectPreset($("preset").value));
+  $("addSynth").addEventListener("click", () => addLayer("synth"));
+  $("addDrums").addEventListener("click", () => addLayer("drums"));
+  $("grid").addEventListener("change", () => {
+    state.roll.grid = Number($("grid").value);
+    state.roll.cursor = Math.round(state.roll.cursor / state.roll.grid) * state.roll.grid;
+    state.roll.draw();
+  });
+  $("loadPattern").addEventListener("change", async () => {
+    const file = $("loadPattern").value;
+    if (!file) return;
+    const p = parsePattern(await patternFile(file));
+    state.roll.snapshot();
+    // tile a shorter pattern across the loop; drop what runs past it
+    const notes = [];
+    const len = p.length || state.lengthBeats;
+    for (let off = 0; off < state.lengthBeats; off += len)
+      for (const n of p.notes) if (n.start + off < state.lengthBeats) notes.push({ ...n, start: n.start + off });
+    layer().notes = notes;
+    sendNotes(state.selected);
+    refreshRoll();
+    renderLayers();
+    $("loadPattern").value = "";
+  });
+  $("stepMode").addEventListener("click", () => {
+    state.roll.stepMode = !state.roll.stepMode;
+    updateStepUi();
+  });
+  $("stepBack").addEventListener("click", () => state.roll.moveCursor(-1));
+  $("stepNext").addEventListener("click", () => state.roll.moveCursor(1));
+  $("undo").addEventListener("click", () => state.roll.undo());
+  $("delNote").addEventListener("click", () => state.roll.deleteSelected());
+  $("clearNotes").addEventListener("click", () => {
+    if (layer().notes.length && confirm(`Clear all notes on ${layer().name}?`)) state.roll.clear();
+  });
+  $("expMid").addEventListener("click", () =>
+    download(`${layer().name.replace(/\s+/g, "_").toLowerCase()}.mid`,
+      patternToMidi(patternText(layer().notes, state.bpm, state.lengthBeats)), "audio/midi"));
+  $("expPat").addEventListener("click", () =>
+    download(`${layer().name.replace(/\s+/g, "_").toLowerCase()}.pat`,
+      patternText(layer().notes, state.bpm, state.lengthBeats), "text/plain"));
+  $("keyRoot").addEventListener("change", () => {
+    releaseAll();
+    state.keyRoot = Number($("keyRoot").value);
+    buildKeyboard();
+    applyScaleToRoll();
+  });
+  $("keyScale").addEventListener("change", () => {
+    releaseAll();
+    state.keyScale = $("keyScale").value;
+    buildKeyboard();
+    applyScaleToRoll();
+  });
   $("volume").addEventListener("input", setVolume);
   $("mute").addEventListener("click", () => {
     state.muted = !state.muted;
@@ -806,7 +971,8 @@ async function boot() {
   });
   $("save").addEventListener("click", savePatch);
   $("delete").addEventListener("click", deletePatch);
-  $("download").addEventListener("click", downloadPatch);
+  $("download").addEventListener("click", () =>
+    download(`${(layer().presetName || "patch").replace(/^patch:/, "").replace(/\W+/g, "_")}.preset`, presetText(), "text/plain"));
   $("copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(presetText());
@@ -817,6 +983,34 @@ async function boot() {
     }
     setTimeout(() => ($("copy").textContent = "Copy"), 1600);
   });
+  updateStepUi();
+  window.addEventListener("resize", () => state.roll.draw());
+}
+
+// Standard MIDI File (format 0) from pattern text — for Logic.
+function patternToMidi(text) {
+  const { bpm, length, notes } = parsePattern(text);
+  const ppq = 480;
+  const ev = [];
+  for (const n of notes)
+    ev.push([Math.round(n.start * ppq), 1, n.note, n.vel], [Math.round(Math.min(n.start + n.dur, length) * ppq), 0, n.note, 0]);
+  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const vlq = (x) => {
+    const out = [x & 0x7f];
+    while ((x >>= 7)) out.unshift((x & 0x7f) | 0x80);
+    return out;
+  };
+  const tempo = Math.round(60000000 / (bpm || 120));
+  const track = [0, 0xff, 0x51, 3, (tempo >> 16) & 255, (tempo >> 8) & 255, tempo & 255];
+  let last = 0;
+  for (const [t, on, n, v] of ev) {
+    track.push(...vlq(t - last), on ? 0x90 : 0x80, n, on ? v : 64);
+    last = t;
+  }
+  track.push(...vlq(Math.max(0, Math.round(length * ppq) - last)), 0xff, 0x2f, 0);
+  const u32 = (x) => [(x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255];
+  return new Uint8Array([0x4d, 0x54, 0x68, 0x64, ...u32(6), 0, 0, 0, 1, (ppq >> 8) & 255, ppq & 255,
+    0x4d, 0x54, 0x72, 0x6b, ...u32(track.length), ...track]);
 }
 
 boot();

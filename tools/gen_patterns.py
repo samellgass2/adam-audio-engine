@@ -198,7 +198,8 @@ def main() -> None:
     for p in patterns():
         (pat_dir / f"{p.name}.pat").write_text(p.pat_text())
         (mid_dir / f"{p.name}.mid").write_bytes(p.midi_bytes())
-        index.append(f'{{"file":"{p.name}.pat","name":"{p.title}","purpose":"{p.purpose}"}}')
+        kind = "drums" if p.name.startswith("drums_") else "synth"
+        index.append(f'{{"file":"{p.name}.pat","name":"{p.title}","purpose":"{p.purpose}","kind":"{kind}"}}')
     (pat_dir / "index.json").write_text("[\n  " + ",\n  ".join(index) + "\n]\n")
     print(f"wrote {len(index)} patterns to {pat_dir} and {mid_dir}")
 

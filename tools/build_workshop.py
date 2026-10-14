@@ -22,14 +22,15 @@ def main() -> None:
     shutil.copytree(ROOT / "fixtures" / "patterns", OUT / "patterns")
     (OUT / "presets").mkdir()
     presets = []
-    order = ["init", "soft_pad", "bright_chords", "supersaw", "pluck"]
+    order = ["init", "soft_pad", "bright_chords", "supersaw", "pluck", "drums_tight", "drums_boomy", "drums_crisp"]
     files = sorted((ROOT / "fixtures" / "presets").glob("*.preset"),
                    key=lambda p: (order.index(p.stem) if p.stem in order else 99, p.stem))
     for f in files:
         shutil.copy2(f, OUT / "presets" / f.name)
         first = next((ln[1:].strip() for ln in f.read_text().splitlines() if ln.startswith("#")), "")
         name = first.split(":")[0] if first else f.stem.replace("_", " ").title()
-        presets.append({"file": f.name, "name": name, "description": first})
+        presets.append({"file": f.name, "name": name, "description": first,
+                        "kind": "drums" if f.stem.startswith("drums_") else "synth"})
     (OUT / "presets" / "index.json").write_text(json.dumps(presets, indent=2) + "\n")
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,

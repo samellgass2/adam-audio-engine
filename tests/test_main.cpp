@@ -318,6 +318,18 @@ void test_sequencer_timing_and_loop() {
     for (auto& e : ev)
         if (std::get<0>(e) == 48000 && std::get<1>(e) == 62 && std::get<2>(e) > 0) wrapped = true;
     CHECK(wrapped, "loop wraps to beat 0 at 48000");
+
+    // An empty loop (a length, no notes) is accepted and keeps time.
+    seq::Sequencer empty;
+    CHECK(empty.load("bpm 120\nlength 4\n") == 0, "empty loop accepted");
+    CHECK(empty.load("bpm 120\n") == -1, "no notes and no length is rejected");
+    empty.load("bpm 120\nlength 4\n");
+    empty.setBpm(120);
+    empty.setPlaying(true);
+    for (int b = 0; b < 375; ++b) empty.advance(128, 48000.0, [](int, int, int) {});  // 1 s = 2 beats
+    CHECK(std::fabs(empty.beat() - 2.0) < 1e-9, "empty loop beat %.6f", empty.beat());
+    for (int b = 0; b < 375; ++b) empty.advance(128, 48000.0, [](int, int, int) {});
+    CHECK(std::fabs(empty.beat()) < 1e-9, "empty loop wraps: %.6f", empty.beat());
 }
 
 void test_patterns_render_clean() {

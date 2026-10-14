@@ -132,7 +132,7 @@ int adam_seq_load(AdamSynth* s, const char* text) {
     if (!s) return 0;
     const bool wasPlaying = s->seq.playing();
     const int notes = s->seq.load(text);
-    if (notes > 0) {
+    if (notes >= 0) {
         s->inst->allNotesOff();
         s->seq.setPlaying(wasPlaying);
     }

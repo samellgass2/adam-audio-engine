@@ -1,12 +1,12 @@
 [
-  {"file":"pad_chords.pat","name":"Soft sustained chords","purpose":"pads, slow attack/release, harmonic smoothness"},
-  {"file":"tight_chords.pat","name":"Tight repeated chords","purpose":"supersaw-style stabs, note transitions, polyphony"},
-  {"file":"lead_melody.pat","name":"Lead melody","purpose":"pitch tracking, articulation, legato vs detached"},
-  {"file":"staccato.pat","name":"Short staccato notes","purpose":"attack behaviour, fast release, percussive patches"},
-  {"file":"fast_repeats.pat","name":"Fast repeated notes","purpose":"voice handling and envelope retriggering"},
-  {"file":"wide_arpeggio.pat","name":"Wide-register arpeggio","purpose":"aliasing, frequency response, pitch consistency"},
-  {"file":"dense_overlap.pat","name":"Dense overlapping notes","purpose":"polyphony limits, voice stealing, output safety"},
-  {"file":"drums_rock.pat","name":"Drums: rock beat","purpose":"kick/snare backbeat, 8th hats, a fill (drum kit)"},
-  {"file":"drums_house.pat","name":"Drums: four on the floor","purpose":"kick every beat, offbeat open hats, clap (drum kit)"},
-  {"file":"drums_halftime.pat","name":"Drums: half-time with ghosts","purpose":"snare on 3, ghost notes, rim, tom fill (drum kit)"}
+  {"file":"pad_chords.pat","name":"Soft sustained chords","purpose":"pads, slow attack/release, harmonic smoothness","kind":"synth"},
+  {"file":"tight_chords.pat","name":"Tight repeated chords","purpose":"supersaw-style stabs, note transitions, polyphony","kind":"synth"},
+  {"file":"lead_melody.pat","name":"Lead melody","purpose":"pitch tracking, articulation, legato vs detached","kind":"synth"},
+  {"file":"staccato.pat","name":"Short staccato notes","purpose":"attack behaviour, fast release, percussive patches","kind":"synth"},
+  {"file":"fast_repeats.pat","name":"Fast repeated notes","purpose":"voice handling and envelope retriggering","kind":"synth"},
+  {"file":"wide_arpeggio.pat","name":"Wide-register arpeggio","purpose":"aliasing, frequency response, pitch consistency","kind":"synth"},
+  {"file":"dense_overlap.pat","name":"Dense overlapping notes","purpose":"polyphony limits, voice stealing, output safety","kind":"synth"},
+  {"file":"drums_rock.pat","name":"Drums: rock beat","purpose":"kick/snare backbeat, 8th hats, a fill (drum kit)","kind":"drums"},
+  {"file":"drums_house.pat","name":"Drums: four on the floor","purpose":"kick every beat, offbeat open hats, clap (drum kit)","kind":"drums"},
+  {"file":"drums_halftime.pat","name":"Drums: half-time with ghosts","purpose":"snare on 3, ghost notes, rim, tom fill (drum kit)","kind":"drums"}
 ]

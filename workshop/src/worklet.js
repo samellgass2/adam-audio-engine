@@ -38,10 +38,11 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     this.port.postMessage({ type: "ready", sampleRate });
   }
 
-  addLayer() {
+  addLayer(kind = 0) {
     if (this.layers.length >= MAX_LAYERS) return null;
-    const layer = { synth: this.wasm.adam_synth_create(sampleRate), muted: false, recording: false,
-      rec: [], notes: [], hasPattern: false };
+    // kind: 0 = core synth, 1 = drum kit (adam_instrument_create)
+    const layer = { synth: this.wasm.adam_instrument_create(kind, sampleRate), kind, muted: false,
+      recording: false, rec: [], notes: [], hasPattern: false };
     this.layers.push(layer);
     return layer;
   }
@@ -97,8 +98,14 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
       case "pattern": {  // the backing pattern = layer 0, the loop's clock
         const s = this.layers[0].synth;
         const ptr = this.writeText(s, m.bytes);
-        const notes = ptr ? w.adam_seq_load(s, ptr) : 0;
+        const notes = ptr ? w.adam_seq_load(s, ptr) : -1;
         this.layers[0].hasPattern = notes > 0;
+        this.layers[0].notes = m.notes || [];
+        if (notes >= 0) {
+          // a new loop: every layer starts again from its top, together
+          for (const l of this.layers) w.adam_seq_seek(l.synth, 0);
+          if (this.playing) w.adam_seq_play(s, 1);
+        }
         this.port.postMessage({ type: "pattern", notes, lengthBeats: w.adam_seq_length(s) });
         break;
       }
@@ -113,8 +120,27 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
       case "rewind": for (const l of this.layers) w.adam_seq_rewind(l.synth); break;
       case "bpm": this.bpm = m.bpm; for (const l of this.layers) w.adam_seq_set_bpm(l.synth, m.bpm); break;
       case "loop": this.loop = !!m.on; for (const l of this.layers) w.adam_seq_set_loop(l.synth, m.on ? 1 : 0); break;
+      case "setNotes": {  // the piano roll edited a layer: replace its notes, keep it in phase
+        if (!layer) break;
+        const beat = this.masterBeat(); // loading rewinds; keep the loop's place
+        const ptr = this.writeText(layer.synth, m.bytes);
+        const count = ptr ? w.adam_seq_load(layer.synth, ptr) : -1;
+        if (count < 0) break;
+        if (m.layer === 0) w.adam_seq_seek(layer.synth, beat);
+        layer.notes = m.notes || [];
+        layer.hasPattern = count > 0 || m.layer === 0;
+        w.adam_seq_set_bpm(layer.synth, this.bpm);
+        w.adam_seq_set_loop(layer.synth, this.loop ? 1 : 0);
+        if (this.playing && layer.hasPattern) {
+          w.adam_seq_play(layer.synth, 1);
+          w.adam_seq_seek(layer.synth, beat);
+        } else if (!layer.hasPattern) {
+          w.adam_seq_play(layer.synth, 0);
+        }
+        break;
+      }
       case "addLayer": {
-        const l = this.addLayer();
+        const l = this.addLayer(m.kind || 0);
         if (l) {
           const ptr = this.writeText(l.synth, m.bytes);
           if (ptr) w.adam_synth_apply_preset(l.synth, ptr);
@@ -127,7 +153,7 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
       }
       case "mute": if (layer) layer.muted = !!m.on; break;
       case "record":
-        if (!layer || m.layer === 0) break;
+        if (!layer) break;
         if (m.on) {
           layer.recording = true;
           layer.rec = [];
@@ -141,7 +167,7 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         layer.hasPattern = false;
         w.adam_seq_play(layer.synth, 0);
         w.adam_synth_all_notes_off(layer.synth);
-        this.port.postMessage({ type: "layerPattern", layer: m.layer, text: "", notes: 0 });
+        this.port.postMessage({ type: "layerPattern", layer: m.layer, text: "", notes: [] });
         break;
       default: break;
     }
@@ -186,9 +212,9 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     w.adam_seq_set_loop(layer.synth, this.loop ? 1 : 0);
     if (this.playing && count > 0) {
       w.adam_seq_play(layer.synth, 1);
-      w.adam_seq_seek(layer.synth, this.masterBeat());
+      w.adam_seq_seek(layer.synth, now); // `now` was read before the load rewound it
     }
-    this.port.postMessage({ type: "layerPattern", layer: this.layers.indexOf(layer), text, notes: count });
+    this.port.postMessage({ type: "layerPattern", layer: this.layers.indexOf(layer), text, notes: layer.notes });
   }
 
   process(_inputs, outputs) {
@@ -244,6 +270,7 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         peakL: m[0], peakR: m[1], rmsL: m[2], rmsR: m[3],
         grDb: m[4], voices, backstop: m[6] + layerBackstop, nanResets,
         beat: this.masterBeat(),
+        lengthBeats: this.loopLength(),
         playing: w.adam_seq_playing(this.layers[0].synth) === 1,
         recording: this.layers.map((l) => l.recording),
       });

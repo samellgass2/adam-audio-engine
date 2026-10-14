@@ -54,7 +54,8 @@ float* adam_synth_out_right(AdamSynth* s);
 
 /* Pattern playback (the shared sequencer; see dsp/include/adam/seq). While
  * playing, adam_synth_render advances it and applies its notes sample-
- * accurately. load returns the number of notes parsed (0 = rejected). */
+ * accurately. load returns the number of notes parsed (0 = an empty loop with
+ * a length, which still keeps time; -1 = rejected). */
 int adam_seq_load(AdamSynth* s, const char* pattern_text);
 void adam_seq_play(AdamSynth* s, int playing);  /* stop also releases notes */
 void adam_seq_set_bpm(AdamSynth* s, double bpm);

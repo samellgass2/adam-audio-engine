@@ -23,11 +23,11 @@
     <section class="transport card">
       <div class="row">
         <label class="field grow">
-          <span>Pattern</span>
+          <span>Backing pattern (the loop)</span>
           <select id="pattern"></select>
         </label>
         <label class="field grow">
-          <span>Preset</span>
+          <span>Sound of <b id="presetFor">Backing</b></span>
           <select id="preset"></select>
         </label>
       </div>
@@ -49,11 +49,60 @@
     <section class="card">
       <div class="row between">
         <h2>Layers</h2>
-        <button id="addLayer">+ Add layer</button>
+        <div class="row">
+          <button id="addSynth">+ Synth</button>
+          <button id="addDrums">+ Drums</button>
+        </div>
       </div>
-      <p class="hint">Each layer is its own synth with its own patch. Pick one (●) to edit its sound and play it;
-        <b>Rec</b> records what you play over the loop (press again to stop; it overdubs). Editing: <b id="editing"></b></p>
+      <p class="hint">Each layer is its own instrument and sound. Pick one (●) to edit, play and record it;
+        <b>Rec</b> records what you play over the loop (overdubs). Editing: <b id="editing"></b></p>
       <div id="layers" class="layers"></div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Notes · <span id="rollName"></span></h2>
+        <div class="row">
+          <label class="field inline"><span>Grid</span>
+            <select id="grid">
+              <option value="1">1/4</option>
+              <option value="0.5" selected>1/8</option>
+              <option value="0.25">1/16</option>
+              <option value="0.3333333333">1/8 T</option>
+            </select>
+          </label>
+          <label class="field inline"><span>Load</span><select id="loadPattern"></select></label>
+        </div>
+      </div>
+      <canvas id="roll" class="roll" aria-label="Piano roll"></canvas>
+      <div class="row">
+        <button id="stepMode" class="toggle" aria-pressed="false" title="Write notes without playing in time">✎ Step entry</button>
+        <button id="stepBack" title="Cursor back one step">◀</button>
+        <button id="stepNext" title="Cursor forward one step (lands the chord)">Next ▶</button>
+        <button id="undo">Undo</button>
+        <button id="delNote">Delete note</button>
+        <button id="clearNotes">Clear</button>
+        <button id="expMid">.mid</button>
+        <button id="expPat">.pat</button>
+      </div>
+      <p class="hint">Tap a cell to add a note · drag to move · drag its right edge to resize · double-tap to delete.
+        <b>Step entry</b> (while stopped): play notes one by one — they stack at the cursor as one chord; <b>Next ▶</b>
+        moves on. Tap the bar numbers to place the cursor.</p>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2 id="playTitle">Play it</h2>
+        <div class="row" id="keyControls">
+          <label class="field inline"><span>Key</span><select id="keyRoot"></select></label>
+          <label class="field inline"><span>Scale</span><select id="keyScale"></select></label>
+          <button id="octDown" aria-label="Octave down">◀ Oct</button>
+          <b id="octLabel">C3–C5</b>
+          <button id="octUp" aria-label="Octave up">Oct ▶</button>
+        </div>
+      </div>
+      <div id="keyboard" class="keyboard"></div>
+      <div id="pads" class="pads" hidden></div>
     </section>
 
     <section class="monitor card">
@@ -96,18 +145,6 @@
           <canvas id="bands"></canvas>
         </div>
       </div>
-    </section>
-
-    <section class="card">
-      <div class="row between">
-        <h2>Play it</h2>
-        <div class="row">
-          <button id="octDown" aria-label="Octave down">◀ Oct</button>
-          <b id="octLabel">C3–C5</b>
-          <button id="octUp" aria-label="Octave up">Oct ▶</button>
-        </div>
-      </div>
-      <div id="keyboard" class="keyboard"></div>
     </section>
 
     <section id="params" class="params"></section>

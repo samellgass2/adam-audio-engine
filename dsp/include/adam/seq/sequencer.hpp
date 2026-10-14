@@ -7,6 +7,7 @@
 //   bpm    72
 //   length 16                  # loop length in beats
 //   note   <start> <dur> <midi> <vel>   # beats, beats, 0-127, 1-127
+// A pattern may hold no notes if it has a length (an empty loop).
 // Parsing writes into fixed storage (no allocation while rendering).
 #pragma once
 
@@ -29,7 +30,8 @@ class Sequencer {
 public:
     static constexpr int kMaxEvents = 4096;
 
-    // Returns the number of notes parsed; 0 on failure (pattern unchanged).
+    // Returns the number of notes parsed (0 for an empty loop with a length,
+    // e.g. a blank track to record into); -1 on failure (pattern unchanged).
     int load(const char* text) {
         if (!text) return 0;
         int count = 0;
@@ -65,8 +67,8 @@ public:
             if (!eol) break;
             p = eol + 1;
         }
-        if (count == 0) return 0;
         if (length <= 0.0) length = maxEnd;
+        if (count == 0 && length <= 0.0) return -1;
         // clip note-offs to the loop so nothing hangs across the boundary
         for (int i = 0; i < count; ++i)
             if (tmp[i].velocity == 0 && tmp[i].beat > length) tmp[i].beat = length;
@@ -104,7 +106,9 @@ public:
     void setLoop(bool on) { loop_ = on; }
     void setPlaying(bool on) { playing_ = on; }
     bool playing() const { return playing_; }
-    double beat() const { return beat_; }
+    // position within the loop (a wrap landing exactly on a block end is
+    // applied at the next block; report it as 0, not as the loop length)
+    double beat() const { return length_ > 0 ? std::fmod(beat_, length_) : beat_; }
     double lengthBeats() const { return length_; }
     int eventCount() const { return count_; }
 
@@ -115,7 +119,7 @@ public:
     // non-looping pattern has finished.
     template <typename F>
     bool advance(int frames, double sampleRate, F&& onEvent) {
-        if (!playing_ || count_ == 0) return playing_;
+        if (!playing_ || length_ <= 0.0) return playing_;  // an empty loop still keeps time
         const double spb = 60.0 * sampleRate / bpm_;  // samples per beat
         if (spb != spb_) {
             // tempo (or rate) changed: keep the musical position
