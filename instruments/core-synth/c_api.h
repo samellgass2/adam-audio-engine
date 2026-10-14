@@ -55,6 +55,19 @@ double adam_seq_length(AdamSynth* s);
 double adam_seq_pattern_bpm(AdamSynth* s);
 int adam_seq_playing(AdamSynth* s);
 
+void adam_seq_seek(AdamSynth* s, double beat);
+
+/* Mix bus: the final safety stage when several synths (looper layers) are
+ * summed. Write the summed L/R into adam_bus_left/right, then process in
+ * place: DC-safe lookahead limiter at -1 dBFS. Meter like the synth's:
+ * [peakL, peakR, rmsL, rmsR, gainReductionDb, 0, backstopHits, 0]. */
+typedef struct AdamBus AdamBus;
+AdamBus* adam_bus_create(float sample_rate);
+float* adam_bus_left(AdamBus* b);
+float* adam_bus_right(AdamBus* b);
+void adam_bus_process(AdamBus* b, int frames);
+float* adam_bus_read_meter(AdamBus* b);
+
 /* Scratch buffer for passing text in (e.g. a pattern from JS). */
 char* adam_text_buffer(AdamSynth* s, int min_size);
 

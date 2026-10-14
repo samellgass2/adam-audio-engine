@@ -113,3 +113,15 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
   input[type="range"] { min-height: 40px; }
   .key.black { width: calc(100% / 15 * 0.7); }
 }
+
+.layers { display: grid; gap: 6px; }
+.layer { display: flex; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; flex-wrap: wrap; }
+.layer.selected { border-color: var(--accent); }
+.layer.recording { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad) inset; }
+.layer .pick { min-width: 40px; color: var(--accent); }
+.layer .lname { display: grid; flex: 1 1 140px; min-width: 0; }
+.layer .lname span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer .lactions { display: flex; gap: 4px; flex-wrap: wrap; }
+.layer .lactions button { min-height: 36px; padding: 4px 10px; font-size: 12px; }
+.layer button.rec { color: var(--bad); }
+.layer button.rec.on { background: var(--bad); border-color: var(--bad); color: #fff; }

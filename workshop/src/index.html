@@ -46,6 +46,16 @@
       </div>
     </section>
 
+    <section class="card">
+      <div class="row between">
+        <h2>Layers</h2>
+        <button id="addLayer">+ Add layer</button>
+      </div>
+      <p class="hint">Each layer is its own synth with its own patch. Pick one (●) to edit its sound and play it;
+        <b>Rec</b> records what you play over the loop (press again to stop; it overdubs). Editing: <b id="editing"></b></p>
+      <div id="layers" class="layers"></div>
+    </section>
+
     <section class="monitor card">
       <div class="meters">
         <div class="meter"><div class="fill" id="mL"></div><div class="rms" id="rL"></div></div>

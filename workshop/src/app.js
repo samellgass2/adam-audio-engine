@@ -22,7 +22,11 @@ const state = {
   muted: false,
   octave: 0,
   peakHold: 0,
+  // looper: layer 0 = the backing pattern (the clock); 1..4 = recorded layers
+  layers: [{ name: "Backing pattern", presetText: "", muted: false, recording: false, text: "", notes: 0 }],
+  selected: 0,
 };
+const MAX_LAYERS = 5;
 
 // ---------------------------------------------------------------- mirror
 function mirrorText(text) {
@@ -61,7 +65,7 @@ function setParam(i, physical) {
   const { w, s } = state.mirror;
   w.adam_synth_set_param(s, i, physical);
   const v = w.adam_synth_get_param(s, i); // clamped by the engine
-  state.node?.port.postMessage({ type: "param", index: i, value: v });
+  state.node?.port.postMessage({ type: "param", index: i, value: v, layer: state.selected });
   state.controls.get(i)?.set(v);
   savePreset();
   return v;
@@ -75,12 +79,13 @@ function applyPresetText(text) {
   const { w, s } = state.mirror;
   w.adam_synth_apply_preset(s, mirrorText(text));
   for (const p of state.params) state.controls.get(p.index)?.set(getParam(p.index));
-  state.node?.port.postMessage({ type: "preset", bytes: enc.encode(text) });
+  state.node?.port.postMessage({ type: "preset", bytes: enc.encode(text), layer: state.selected });
   savePreset();
 }
 
 function savePreset() {
   $("presetText").value = presetText();
+  state.layers[state.selected].presetText = $("presetText").value;
   try {
     localStorage.setItem("adam.workshop.preset", $("presetText").value);
   } catch {
@@ -327,7 +332,7 @@ async function startAudio() {
   });
   node.port.onmessage = (e) => onWorkletMessage(e.data);
   // bring the audio engine to the UI's state
-  node.port.postMessage({ type: "preset", bytes: enc.encode(presetText()) });
+  node.port.postMessage({ type: "preset", bytes: enc.encode(presetText()), layer: 0 });
   await selectPattern($("pattern").value);
   node.port.postMessage({ type: "loop", on: state.loop });
   await ctx.resume();
@@ -416,7 +421,132 @@ function drawBars(canvas, values, label, floorDb) {
   });
 }
 
+// ---------------------------------------------------------------- looper
+function selectLayer(i) {
+  if (i === state.selected || !state.layers[i]) return;
+  [...held.keys()].forEach(noteOff); // notes belong to the layer they started on
+  state.selected = i;
+  const { w, s } = state.mirror;
+  w.adam_synth_apply_preset(s, mirrorText(state.layers[i].presetText));
+  for (const p of state.params) state.controls.get(p.index)?.set(getParam(p.index));
+  $("presetText").value = state.layers[i].presetText;
+  renderLayers();
+}
+
+function addLayer() {
+  if (state.layers.length >= MAX_LAYERS) return;
+  const presetTextNow = presetText(); // a new layer starts from the current sound
+  state.layers.push({ name: `Layer ${state.layers.length}`, presetText: presetTextNow, muted: false,
+    recording: false, text: "", notes: 0 });
+  state.node?.port.postMessage({ type: "addLayer", bytes: enc.encode(presetTextNow) });
+  selectLayer(state.layers.length - 1);
+}
+
+function toggleRecord(i) {
+  const layer = state.layers[i];
+  if (!layer.recording && !state.playing) setPlaying(true); // recording needs the loop running
+  layer.recording = !layer.recording;
+  if (layer.recording) selectLayer(i);
+  state.node?.port.postMessage({ type: "record", layer: i, on: layer.recording });
+  renderLayers();
+}
+
+function patternToMidi(text) {
+  const bpm = Number(/^bpm\s+([\d.]+)/m.exec(text)?.[1] || 120);
+  const length = Number(/^length\s+([\d.]+)/m.exec(text)?.[1] || 16);
+  const ppq = 480;
+  const ev = [];
+  for (const m of text.matchAll(/^note\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)/gm)) {
+    const [s, d, n, v] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+    ev.push([Math.round(s * ppq), 1, n, v], [Math.round(Math.min(s + d, length) * ppq), 0, n, 0]);
+  }
+  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const vlq = (x) => {
+    const out = [x & 0x7f];
+    while ((x >>= 7)) out.unshift((x & 0x7f) | 0x80);
+    return out;
+  };
+  const tempo = Math.round(60000000 / bpm);
+  const track = [0, 0xff, 0x51, 3, (tempo >> 16) & 255, (tempo >> 8) & 255, tempo & 255];
+  let last = 0;
+  for (const [t, on, n, v] of ev) {
+    track.push(...vlq(t - last), on ? 0x90 : 0x80, n, on ? v : 64);
+    last = t;
+  }
+  track.push(...vlq(Math.max(0, Math.round(length * ppq) - last)), 0xff, 0x2f, 0);
+  const u32 = (x) => [(x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255];
+  return new Uint8Array([0x4d, 0x54, 0x68, 0x64, ...u32(6), 0, 0, 0, 1, (ppq >> 8) & 255, ppq & 255,
+    0x4d, 0x54, 0x72, 0x6b, ...u32(track.length), ...track]);
+}
+
+function exportLayer(i, kind) {
+  const layer = state.layers[i];
+  if (!layer.text) return;
+  const data = kind === "mid" ? patternToMidi(layer.text) : layer.text;
+  const blob = new Blob([data], { type: kind === "mid" ? "audio/midi" : "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${layer.name.replace(/\s+/g, "_").toLowerCase()}.${kind === "mid" ? "mid" : "pat"}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function renderLayers() {
+  const box = $("layers");
+  box.innerHTML = "";
+  state.layers.forEach((layer, i) => {
+    const row = document.createElement("div");
+    row.className = `layer${i === state.selected ? " selected" : ""}${layer.recording ? " recording" : ""}`;
+    const info = i === 0 ? $("pattern").selectedOptions[0]?.text || "pattern" : layer.notes ? `${layer.notes} notes` : "empty — press Rec and play";
+    row.innerHTML = `<button class="pick" aria-label="Edit ${layer.name}">${i === state.selected ? "●" : "○"}</button>
+      <div class="lname"><b>${layer.name}</b><span>${info}</span></div>`;
+    const actions = document.createElement("div");
+    actions.className = "lactions";
+    const btn = (label, title, fn, cls = "") => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = title;
+      if (cls) b.className = cls;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fn();
+      });
+      actions.appendChild(b);
+    };
+    if (i > 0) btn(layer.recording ? "■ Stop rec" : "● Rec", "Record what you play into this layer (overdubs)", () => toggleRecord(i), layer.recording ? "rec on" : "rec");
+    btn(layer.muted ? "Unmute" : "Mute", "Mute this layer", () => {
+      layer.muted = !layer.muted;
+      state.node?.port.postMessage({ type: "mute", layer: i, on: layer.muted });
+      renderLayers();
+    }, layer.muted ? "toggle on" : "toggle");
+    if (i > 0) {
+      btn("Clear", "Erase this layer's notes", () => {
+        if (layer.recording) toggleRecord(i);
+        state.node?.port.postMessage({ type: "clear", layer: i });
+      });
+      if (layer.text) {
+        btn(".mid", "Download this layer as MIDI (for Logic)", () => exportLayer(i, "mid"));
+        btn(".pat", "Download this layer as an engine pattern", () => exportLayer(i, "pat"));
+      }
+    }
+    row.appendChild(actions);
+    row.addEventListener("click", () => selectLayer(i));
+    box.appendChild(row);
+  });
+  $("addLayer").disabled = state.layers.length >= MAX_LAYERS;
+  $("editing").textContent = state.layers[state.selected].name;
+}
+
 function onWorkletMessage(m) {
+  if (m.type === "layerPattern") {
+    const layer = state.layers[m.layer];
+    if (layer) {
+      layer.text = m.text;
+      layer.notes = m.notes;
+      renderLayers();
+    }
+    return;
+  }
   if (m.type === "snapshot") {
     // the most recent ~85 ms: short enough to hold one note of a melody
     analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096));
@@ -441,6 +571,12 @@ function onWorkletMessage(m) {
     : "output safe";
   if (state.lengthBeats > 0) $("beatbar").style.width = `${((m.beat % state.lengthBeats) / state.lengthBeats) * 100}%`;
   if (state.playing && !m.playing) setPlaying(false); // a non-looping pattern ended
+  if (m.recording) m.recording.forEach((r, i) => {
+    if (state.layers[i] && state.layers[i].recording !== r) {
+      state.layers[i].recording = r;
+      renderLayers();
+    }
+  });
 }
 
 function setPlaying(on) {
@@ -540,7 +676,7 @@ const held = new Map(); // pointerId|key -> note
 function noteOn(note, id) {
   if (held.has(id)) return;
   held.set(id, note);
-  state.node?.port.postMessage({ type: "noteOn", note, velocity: 100 });
+  state.node?.port.postMessage({ type: "noteOn", note, velocity: 100, layer: state.selected });
   document.querySelector(`.key[data-note="${note}"]`)?.classList.add("down");
 }
 
@@ -548,7 +684,7 @@ function noteOff(id) {
   const note = held.get(id);
   if (note === undefined) return;
   held.delete(id);
-  state.node?.port.postMessage({ type: "noteOff", note });
+  state.node?.port.postMessage({ type: "noteOff", note, layer: state.selected });
   if (![...held.values()].includes(note)) document.querySelector(`.key[data-note="${note}"]`)?.classList.remove("down");
 }
 
@@ -634,6 +770,8 @@ async function boot() {
     }
     if (lastPattern && [...$("pattern").options].some((o) => o.value === lastPattern)) $("pattern").value = lastPattern;
     refreshPatchOptions();
+    renderLayers();
+    $("addLayer").addEventListener("click", addLayer);
     await selectPreset($("preset").value);
     await selectPattern($("pattern").value);
   } catch (err) {
@@ -658,7 +796,7 @@ async function boot() {
     $("bpmval").textContent = `${$("bpm").value} bpm`;
     state.node?.port.postMessage({ type: "bpm", bpm: Number($("bpm").value) });
   });
-  $("pattern").addEventListener("change", () => selectPattern($("pattern").value));
+  $("pattern").addEventListener("change", () => selectPattern($("pattern").value).then(renderLayers));
   $("preset").addEventListener("change", () => selectPreset($("preset").value));
   $("volume").addEventListener("input", setVolume);
   $("mute").addEventListener("click", () => {

@@ -40,7 +40,8 @@ if(EMSCRIPTEN)
     _adam_synth_snap_params _adam_synth_render _adam_synth_out_left _adam_synth_out_right _adam_synth_read_meter
     _adam_seq_load _adam_seq_play _adam_seq_set_bpm _adam_seq_set_loop _adam_seq_rewind
     _adam_seq_beat _adam_seq_length _adam_seq_pattern_bpm _adam_seq_playing
-    _adam_text_buffer _adam_analysis_input _adam_analyze)
+    _adam_text_buffer _adam_analysis_input _adam_analyze
+    _adam_seq_seek _adam_bus_create _adam_bus_left _adam_bus_right _adam_bus_process _adam_bus_read_meter)
   list(JOIN ADAM_WASM_EXPORTS "," ADAM_WASM_EXPORTS_CSV)
   target_link_options(adam_synth_wasm PRIVATE
     -sSTANDALONE_WASM=1 --no-entry

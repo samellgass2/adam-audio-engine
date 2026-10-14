@@ -1,5 +1,6 @@
 #include "c_api.h"
 
+#include <cmath>
 #include <new>
 
 #include "adam/seq/sequencer.hpp"
@@ -111,6 +112,65 @@ double adam_seq_beat(AdamSynth* s) { return s ? s->seq.beat() : 0.0; }
 double adam_seq_length(AdamSynth* s) { return s ? s->seq.lengthBeats() : 0.0; }
 double adam_seq_pattern_bpm(AdamSynth* s) { return s ? s->seq.patternBpm() : 0.0; }
 int adam_seq_playing(AdamSynth* s) { return s && s->seq.playing() ? 1 : 0; }
+
+void adam_seq_seek(AdamSynth* s, double beat) {
+    if (s) s->seq.seek(beat);
+}
+
+}  // extern "C"
+
+struct AdamBus {
+    adam::dsp::Limiter limiter;
+    float left[ADAM_MAX_BLOCK];
+    float right[ADAM_MAX_BLOCK];
+    float meter[8];
+    float peakL = 0, peakR = 0, rmsL = 0, rmsR = 0;
+};
+
+extern "C" {
+
+AdamBus* adam_bus_create(float sample_rate) {
+    auto* b = new (std::nothrow) AdamBus();
+    if (b) b->limiter.setup(sample_rate > 1000 ? sample_rate : 48000.0f, -1.0f, 1.5f, 120.0f);
+    return b;
+}
+float* adam_bus_left(AdamBus* b) { return b ? b->left : nullptr; }
+float* adam_bus_right(AdamBus* b) { return b ? b->right : nullptr; }
+
+void adam_bus_process(AdamBus* b, int frames) {
+    if (!b) return;
+    if (frames > ADAM_MAX_BLOCK) frames = ADAM_MAX_BLOCK;
+    double sl = 0, sr = 0;
+    for (int i = 0; i < frames; ++i) {
+        float l = std::isfinite(b->left[i]) ? b->left[i] : 0.0f;
+        float r = std::isfinite(b->right[i]) ? b->right[i] : 0.0f;
+        b->limiter.process(l, r);
+        b->left[i] = l;
+        b->right[i] = r;
+        b->peakL = std::fmax(b->peakL, std::fabs(l));
+        b->peakR = std::fmax(b->peakR, std::fabs(r));
+        sl += double(l) * l;
+        sr += double(r) * r;
+    }
+    if (frames > 0) {
+        b->rmsL = static_cast<float>(std::sqrt(sl / frames));
+        b->rmsR = static_cast<float>(std::sqrt(sr / frames));
+    }
+}
+
+float* adam_bus_read_meter(AdamBus* b) {
+    if (!b) return nullptr;
+    b->meter[0] = b->peakL;
+    b->meter[1] = b->peakR;
+    b->meter[2] = b->rmsL;
+    b->meter[3] = b->rmsR;
+    b->meter[4] = b->limiter.gainReductionDb();
+    b->meter[5] = 0;
+    b->meter[6] = static_cast<float>(b->limiter.backstopHits());
+    b->meter[7] = 0;
+    b->peakL = b->peakR = 0;
+    return b->meter;
+}
 
 char* adam_text_buffer(AdamSynth* s, int min_size) {
     if (!s || min_size > static_cast<int>(sizeof s->text)) return nullptr;

@@ -11,6 +11,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -86,6 +87,15 @@ public:
         beat_ = 0.0;
         cur_ = 0;
         next_ = 0;
+    }
+
+    // Jump to a musical position (beats), e.g. to start a new layer in phase
+    // with a loop that is already running.
+    void seek(double beat) {
+        beat_ = length_ > 0 ? std::fmod(std::max(0.0, beat), length_) : 0.0;
+        spb_ = 0.0;  // the next advance recomputes the sample position
+        next_ = 0;
+        while (next_ < count_ && events_[next_].beat < beat_) ++next_;
     }
 
     void setBpm(double bpm) { bpm_ = bpm > 1 ? bpm : 1; }

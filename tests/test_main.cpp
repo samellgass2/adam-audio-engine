@@ -577,6 +577,69 @@ void test_analysis_sees_what_is_there() {
     CHECK(bright > 2 * dark, "centroid dark %.0f bright %.0f", dark, bright);
 }
 
+void test_layers_stay_in_phase_and_bus_is_safe() {
+    // Prediction: a layer seeked to the master's beat fires its events on the
+    // same samples as the master; four loud layers summed through the bus stay
+    // at or below -1 dBFS with the backstop untouched.
+    AdamSynth* master = adam_synth_create(kSr);
+    AdamSynth* layer = adam_synth_create(kSr);
+    const char* pat = "bpm 120\nlength 4\nnote 0 0.5 60 100\nnote 2 0.5 64 100\n";
+    adam_seq_load(master, pat);
+    adam_seq_load(layer, pat);
+    for (AdamSynth* s : {master, layer}) {
+        adam_seq_set_bpm(s, 120);
+        adam_seq_set_loop(s, 1);
+    }
+    adam_seq_play(master, 1);
+    for (int b = 0; b < 300; ++b) adam_synth_render(master, 128);  // master runs on alone
+    adam_seq_play(layer, 1);
+    adam_seq_seek(layer, adam_seq_beat(master));
+    double maxDiff = 0;
+    for (int b = 0; b < 1500; ++b) {  // 4 s = 2 loops
+        adam_synth_render(master, 128);
+        adam_synth_render(layer, 128);
+        if (b > 750)  // after the layer's first full loop the two must be identical
+            for (int i = 0; i < 128; ++i)
+                maxDiff = std::max(maxDiff, double(std::fabs(adam_synth_out_left(master)[i] - adam_synth_out_left(layer)[i])));
+    }
+    CHECK(std::fabs(adam_seq_beat(master) - adam_seq_beat(layer)) < 1e-9, "beats %f vs %f", adam_seq_beat(master),
+          adam_seq_beat(layer));
+    CHECK(maxDiff < 1e-6, "layer out of phase: %.3e", maxDiff);
+    adam_synth_destroy(master);
+    adam_synth_destroy(layer);
+
+    AdamBus* bus = adam_bus_create(kSr);
+    std::vector<AdamSynth*> layers;
+    for (int k = 0; k < 4; ++k) {
+        AdamSynth* s = adam_synth_create(kSr);
+        adam_synth_set_param(s, core_synth::kMasterGain, 6);
+        for (int n = 0; n < 8; ++n) adam_synth_note_on(s, 40 + 3 * n + k, 127);
+        layers.push_back(s);
+    }
+    const float ceiling = std::pow(10.0f, -1.0f / 20.0f);
+    float peak = 0;
+    for (int b = 0; b < 400; ++b) {
+        float* L = adam_bus_left(bus);
+        float* R = adam_bus_right(bus);
+        std::fill(L, L + 128, 0.0f);
+        std::fill(R, R + 128, 0.0f);
+        for (AdamSynth* s : layers) {
+            adam_synth_render(s, 128);
+            for (int i = 0; i < 128; ++i) {
+                L[i] += adam_synth_out_left(s)[i];
+                R[i] += adam_synth_out_right(s)[i];
+            }
+        }
+        adam_bus_process(bus, 128);
+        for (int i = 0; i < 128; ++i) peak = std::max(peak, std::max(std::fabs(L[i]), std::fabs(R[i])));
+    }
+    const float* m = adam_bus_read_meter(bus);
+    std::printf("    bus: 4 layers x 8 voices at +6 dB -> peak %.2f dBFS, limiting %.1f dB\n", 20 * std::log10(peak), m[4]);
+    CHECK(peak <= ceiling * 1.0001f, "bus peak %.4f", peak);
+    CHECK(m[6] == 0, "bus backstop %g", m[6]);
+    for (AdamSynth* s : layers) adam_synth_destroy(s);
+}
+
 int main() {
     struct T {
         const char* name;
@@ -598,6 +661,7 @@ int main() {
         {"limiter_intersample", test_limiter_intersample},
         {"determinism_block_size", test_determinism_and_block_size},
         {"analysis_sees_what_is_there", test_analysis_sees_what_is_there},
+        {"layers_in_phase_bus_safe", test_layers_stay_in_phase_and_bus_is_safe},
     };
     const char* only = std::getenv("ADAM_TEST");
     for (auto& t : tests) {
