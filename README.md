@@ -24,6 +24,13 @@ Audio Unit. Spec: adamOS `docs/specs/ADAM_AUDIO_ENGINE_2026_10_13.md`.
 - **Workshop** (`workshop/src`): pattern + preset pickers, play/loop/tempo, all
   parameters live, meters, limiter and safety readout, spectrum + scope, an
   on-screen/computer keyboard, "Copy preset" for feedback.
+- **Drum kit** (`instruments/drum-kit`): synthesized kick, snare, clap,
+  808-style hats (closed chokes open), three toms, rim; velocity changes
+  timbre, `humanize` varies each hit (deterministically); GM drum map.
+  Also an AU: **Adam Drums** (`aumu AdDr Adam`).
+- **Tiny DAW** (workshop): synth or drum layers, a piano roll per layer
+  (add / move / resize / delete, live record over it, step-entry chords while
+  stopped), drum pads, a key/scale-locked keyboard, empty loops to start from.
 - **Layered looper** (workshop): the backing pattern is the loop's clock; up
   to 4 more layers, each its own synth and patch; Rec captures what you play
   (overdubs), the engine's sequencer replays it in phase (`seek`), layers sum
@@ -67,8 +74,9 @@ plugin API) against the engine (`tools/compare_wav.py`, residual < −120 dB).
 In Logic: new Software Instrument track → AU Instruments → Adam → Adam Core
 Synth. Every parameter is automatable; the generic editor lists them all.
 
-**Adding another instrument as an AU:** write a descriptor (engine type +
-parameter table; see `hosts/juce-au/core_synth_plugin.cpp`) and one call:
+**Adding another instrument as an AU:** implement `adam::Instrument`
+(`dsp/include/adam/instrument.hpp`), a three-line plugin source (see
+`hosts/juce-au/drum_kit_plugin.cpp`), and one call:
 
 ```cmake
 adam_add_audio_unit(AdamFoo PRODUCT_NAME "Adam Foo" PLUGIN_CODE AdFo

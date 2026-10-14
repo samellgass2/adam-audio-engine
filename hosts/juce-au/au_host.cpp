@@ -14,6 +14,7 @@
 #include <sstream>
 
 #include "adam/seq/sequencer.hpp"
+#include "drum_kit.hpp"
 #include "params.hpp"
 
 namespace cs = adam::core_synth;
@@ -27,7 +28,7 @@ static std::string readFile(const std::string& p) {
 
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI juceInit;
-    std::string au = "aumu,AdCs,Adam", pattern, preset, out;
+    std::string au = "aumu,AdCs,Adam", pattern, preset, out, instrument = "synth";
     double seconds = 8, tail = 0, sr = 48000;
     int block = 128;
     for (int i = 1; i + 1 < argc; i += 2) {
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
         else if (k == "--sr") sr = std::atof(v.c_str());
         else if (k == "--block") block = std::atoi(v.c_str());
         else if (k == "--out") out = v;
+        else if (k == "--instrument") instrument = v;
     }
     if (pattern.empty() || out.empty()) {
         std::fprintf(stderr, "usage: adam-au-host --pattern P [--preset F] --out W [--au type,sub,manu]\n");
@@ -77,18 +79,20 @@ int main(int argc, char** argv) {
             char id[96];
             float v;
             if (std::sscanf(line.c_str(), "%95s %f", id, &v) != 2) continue;
-            const int idx = cs::paramIndexForId(id);
+            const bool drums = instrument == "drums";
+            const adam::ParamSpec* specs = drums ? adam::drum_kit::paramSpecs() : cs::paramSpecs();
+            const int count = drums ? adam::drum_kit::kParamCount : cs::kParamCount;
+            const int idx = adam::params::indexForId(specs, count, id);
             if (idx < 0) continue;
-            const auto pid = static_cast<cs::ParamId>(idx);
-            const auto& spec = cs::paramSpec(pid);
+            const auto& spec = specs[idx];
             auto it = byName.find(spec.name);
             if (it == byName.end()) {
                 std::fprintf(stderr, "adam-au-host: AU has no parameter named %s\n", spec.name);
                 return 3;
             }
-            const float phys = cs::clampPhysical(pid, v);
-            float n = cs::toNormalized(pid, phys);
-            if (spec.mapping == cs::Mapping::Choice) n = (phys - spec.min) / (spec.max - spec.min);
+            const float phys = adam::params::clamp(spec, v);
+            float n = adam::params::toNormalized(spec, phys);
+            if (spec.mapping == adam::Mapping::Choice) n = (phys - spec.min) / (spec.max - spec.min);
             it->second->setValue(n);
             ++applied;
         }

@@ -46,6 +46,12 @@ adam_add_audio_unit(AdamCoreSynth
   SOURCE core_synth_plugin.cpp
   ENGINE_LIB adam_core_synth)
 
+adam_add_audio_unit(AdamDrums
+  PRODUCT_NAME "Adam Drums"
+  PLUGIN_CODE AdDr
+  SOURCE drum_kit_plugin.cpp
+  ENGINE_LIB adam_core_synth)
+
 # adam-au-host: renders through an installed AU via the real plugin API (the
 # AU<->engine parity check; see tools/compare_wav.py).
 juce_add_console_app(adam-au-host PRODUCT_NAME "adam-au-host")

@@ -11,15 +11,17 @@ cd "$(dirname "$0")/.."
 cmake -S . -B build/au -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DADAM_BUILD_AU=ON -DADAM_BUILD_TESTS=OFF -DADAM_BUILD_RENDERER=OFF >/dev/null
 # JUCE copies the .component into ~/Library/Audio/Plug-Ins/Components
-cmake --build build/au --target AdamCoreSynth_AU adam-au-host
+cmake --build build/au --target AdamCoreSynth_AU AdamDrums_AU adam-au-host
 
 # make the system (and Logic) rescan components
 killall -9 AudioComponentRegistrar 2>/dev/null || true
 sleep 2
 
-echo "== auval aumu AdCs Adam"
-auval -v aumu AdCs Adam > out/auval.log 2>&1 || { tail -30 out/auval.log; exit 1; }
-grep -q "AU VALIDATION SUCCEEDED" out/auval.log && echo "auval: AU VALIDATION SUCCEEDED"
+for code in AdCs AdDr; do
+  echo "== auval aumu $code Adam"
+  auval -v aumu "$code" Adam > "out/auval_$code.log" 2>&1 || { tail -30 "out/auval_$code.log"; exit 1; }
+  grep -q "AU VALIDATION SUCCEEDED" "out/auval_$code.log" && echo "auval $code: AU VALIDATION SUCCEEDED"
+done
 
 if [[ -z "${SKIP_PARITY:-}" ]]; then
   cmake --build build/native --target adam-render >/dev/null
@@ -34,6 +36,16 @@ if [[ -z "${SKIP_PARITY:-}" ]]; then
     printf "AU parity %-28s " "$preset/$pattern"
     python3 tools/compare_wav.py "out/native_$pattern.wav" "out/au_$pattern.wav"
   done
+  for pair in "drums_tight drums_rock" "drums_boomy drums_halftime"; do
+    read -r preset pattern <<<"$pair"
+    ./build/native/adam-render --instrument drums --pattern "fixtures/patterns/$pattern.pat" \
+      --preset "fixtures/presets/$preset.preset" --seconds 6 --tail 2 --out "out/native_$pattern.wav" >/dev/null
+    "$host" --au aumu,AdDr,Adam --instrument drums --pattern "fixtures/patterns/$pattern.pat" \
+      --preset "fixtures/presets/$preset.preset" --seconds 6 --tail 2 --out "out/au_$pattern.wav" >/dev/null
+    printf "AU parity %-28s " "$preset/$pattern"
+    python3 tools/compare_wav.py "out/native_$pattern.wav" "out/au_$pattern.wav"
+  done
 fi
 echo "installed: ~/Library/Audio/Plug-Ins/Components/Adam Core Synth.component"
-echo "In Logic: new Software Instrument track -> AU Instruments -> Adam -> Adam Core Synth"
+echo "installed: ~/Library/Audio/Plug-Ins/Components/Adam Drums.component"
+echo "In Logic: new Software Instrument track -> AU Instruments -> Adam -> Adam Core Synth / Adam Drums"

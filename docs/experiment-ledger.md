@@ -4,6 +4,24 @@ One entry per meaningful DSP change: what changed, what we expected to hear,
 what we measured, where the renders are, the human verdict, and the outcome.
 Newest first. "Awaiting listen" means no human has judged it yet.
 
+## 2026-10-14 — Drum kit with liveness; Adam Drums AU; workshop as a tiny DAW
+
+- **Change:** `adam::Instrument` interface (synth now implements it; output
+  bit-identical). Drum kit engine (kick/snare/clap/hats/toms/rim; velocity
+  -> timbre; deterministic humanize). Adam Drums AU via the generic
+  descriptor. Workshop: per-layer instrument, piano roll + step entry, pads,
+  key/scale keyboard, empty loops.
+- **Expected:** a punchy, playable kit whose repeats breathe a little; harder
+  hits brighter, not only louder.
+- **Measured:** kick 140 Hz at the hit -> 50.3 Hz (tuned 50), -55 dB by its
+  decay; humanize 0 = identical hits, 60 = varied; snare centroid 8.1 ->
+  9.3 kHz from velocity 40 -> 127 (first build only +5% — fixed); closed hat
+  chokes open; 3 kits x 3 beats and 30 extreme trials safe; Adam Drums auval
+  OK, AU parity -134 / -129 dB.
+- **Human verdict:** awaiting listen (pads and beats in the workshop; Adam
+  Drums in Logic).
+- **Outcome:** accepted pending ears.
+
 ## 2026-10-13 — Drive, unison (supersaw), delayed vibrato
 
 - **Change:** six parameters appended (ids frozen above them):
