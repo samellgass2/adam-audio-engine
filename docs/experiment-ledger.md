@@ -4,6 +4,30 @@ One entry per meaningful DSP change: what changed, what we expected to hear,
 what we measured, where the renders are, the human verdict, and the outcome.
 Newest first. "Awaiting listen" means no human has judged it yet.
 
+## 2026-10-13 — Logic AU (checkpoint 4, engineering half)
+
+- **Change:** generic JUCE wrapper (`AdamInstrumentProcessor<Descriptor>`) +
+  `adam_add_audio_unit()`; Adam Core Synth as AUv2 `aumu AdCs Adam`, JUCE
+  9.0.4 pinned. Parameters come from the engine contract with the engine's own
+  normalized<->physical mapping (JUCE publishes AU params as normalized 0..1,
+  so Logic automation moves along the same curve as the workshop sliders).
+  Sample-accurate MIDI, sustain, all-notes/sound off, state save/restore,
+  reported latency = limiter lookahead.
+- **Expected:** the AU is the same instrument as the workshop, sample for sample.
+- **Measured:** `auval -v aumu AdCs Adam` → AU VALIDATION SUCCEEDED; ad-hoc
+  signature valid. `adam-au-host` (the installed component via JUCE's AU
+  hosting) vs `adam-render`, 6 s + 2 s tail, lag 0: bright_chords/tight_chords
+  −129.0 dB, soft_pad/pad_chords −123.4 dB, pluck/staccato −133.7 dB,
+  init/dense_overlap −130.6 dB residual.
+- **Found on the way:** (1) display names with "→" did not survive the AU
+  name round-trip — now ASCII ("LFO to Pitch"), with a test; (2) a reopened
+  project would glide its first ~20 ms in from the defaults — engines now
+  `snapSmoothing()` after a patch loads (AU prepare, renderer).
+- **Human verdict:** awaiting Sam in Logic on hardware (keyboard, recording,
+  automation, save/reopen, sample-rate and buffer changes) — and the keeper
+  presets deferred from checkpoint 3.
+- **Outcome:** accepted pending the Logic session.
+
 ## 2026-10-13 — Core synth v0 (checkpoints 0–2)
 
 - **Change:** first engine — 2 PolyBLEP/BLAMP oscillators + noise, ZDF
@@ -25,5 +49,11 @@ Newest first. "Awaiting listen" means no human has judged it yet.
 - **Known limits:** saw/pulse aliasing at G7 ~−30 dB (next: higher-order BLEP
   or 2× oversampling the oscillator); filter has no drive/saturation; one LFO
   shared by all voices; envelopes not velocity-scaled in time.
-- **Human verdict:** awaiting listen (staged on port 8432).
+- **Human verdict (Sam, 2026-10-13, phone, workshop):** "fantastic… a really
+  clear sound." Soft pad on the slow chords is good; the cutoff range and its
+  default are sensible (tried very low and very high); detuning works;
+  triangle/square swaps fine; staccato fine; nothing clicky, nothing thin.
+  Friction: everything-as-sliders is unintuitive on a phone; semitone
+  shifting (a −24..+24 slider) is awkward. Keeper presets are deferred to
+  Logic on real hardware — checkpoint 3's remainder moves to checkpoint 4.
 - **Outcome:** accepted as the baseline.

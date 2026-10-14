@@ -55,6 +55,10 @@ void CoreSynth::resetParamsToDefaults() {
     envDirty_ = true;
 }
 
+void CoreSynth::snapSmoothing() {
+    for (int i = 0; i < kParamCount; ++i) smooth_[i].snap(values_[i]);
+}
+
 void CoreSynth::setParam(ParamId id, float physical) {
     if (id >= kParamCount) return;
     const float v = clampPhysical(id, physical);

@@ -178,6 +178,10 @@ void test_param_contract() {
         }
         CHECK(core_synth::clampPhysical(id, NAN) == s.def, "%s NaN not defaulted", s.id);
         CHECK(core_synth::paramIndexForId(s.id) == i, "%s id lookup", s.id);
+        // hosts (Logic's AU layer) mangle non-ASCII display names
+        bool ascii = true;
+        for (const char* c = s.name; *c; ++c) ascii = ascii && static_cast<unsigned char>(*c) < 128;
+        CHECK(ascii, "%s display name '%s' is not plain ASCII", s.id, s.name);
     }
     const std::string json = core_synth::paramsJson();
     CHECK(json.front() == '[' && json.back() == ']', "json brackets");

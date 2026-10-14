@@ -63,6 +63,8 @@ int adam_synth_apply_preset(AdamSynth* s, const char* text) {
     return s ? adam::core_synth::applyPreset(s->synth, text) : 0;
 }
 
+void adam_synth_snap_params(AdamSynth* s) { if (s) s->synth.snapSmoothing(); }
+
 void adam_synth_render(AdamSynth* s, int frames) {
     if (!s) return;
     if (frames > ADAM_MAX_BLOCK) frames = ADAM_MAX_BLOCK;

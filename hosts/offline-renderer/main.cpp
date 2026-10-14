@@ -110,6 +110,8 @@ int main(int argc, char** argv) {
         adam_synth_set_param(s, idx, static_cast<float>(std::atof(kv.c_str() + eq + 1)));
     }
 
+    adam_synth_snap_params(s);  // render the patch from sample 0, no glide-in
+
     const std::string patText = readFile(pattern);
     if (adam_seq_load(s, patText.c_str()) <= 0) {
         std::fprintf(stderr, "adam-render: no notes in %s\n", pattern.c_str());

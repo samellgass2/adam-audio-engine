@@ -34,6 +34,9 @@ const char* adam_params_json(void);
  * Returns the number of params applied. */
 int adam_synth_apply_preset(AdamSynth* s, const char* preset_text);
 
+/* Jump smoothed parameters to their targets (call after loading a patch). */
+void adam_synth_snap_params(AdamSynth* s);
+
 /* Render `frames` (<= ADAM_MAX_BLOCK) into the handle's buffers. */
 void adam_synth_render(AdamSynth* s, int frames);
 float* adam_synth_out_left(AdamSynth* s);

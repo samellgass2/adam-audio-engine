@@ -37,7 +37,7 @@ if(EMSCRIPTEN)
     _adam_synth_all_notes_off _adam_synth_all_sound_off
     _adam_synth_set_param _adam_synth_get_param
     _adam_synth_apply_preset _adam_param_count _adam_param_to_physical _adam_param_to_normalized _adam_params_json
-    _adam_synth_render _adam_synth_out_left _adam_synth_out_right _adam_synth_read_meter
+    _adam_synth_snap_params _adam_synth_render _adam_synth_out_left _adam_synth_out_right _adam_synth_read_meter
     _adam_seq_load _adam_seq_play _adam_seq_set_bpm _adam_seq_set_loop _adam_seq_rewind
     _adam_seq_beat _adam_seq_length _adam_seq_pattern_bpm _adam_seq_playing
     _adam_text_buffer)

@@ -39,6 +39,9 @@ public:
     void setParam(ParamId id, float physical);
     float param(ParamId id) const { return values_[id]; }
     void resetParamsToDefaults();
+    // Jump every smoothed parameter to its target (after loading a patch, so the
+    // first note does not glide in from the defaults).
+    void snapSmoothing();
 
     void noteOn(int note, int velocity);
     void noteOff(int note);

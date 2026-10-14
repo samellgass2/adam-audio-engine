@@ -17,8 +17,9 @@ Audio Unit. Spec: adamOS `docs/specs/ADAM_AUDIO_ENGINE_2026_10_13.md`.
 - **One sequencer** (`dsp/include/adam/seq`): sample-accurate pattern playback
   on an integer sample clock, used by the renderer, the tests and the browser.
 - **Hosts:** a C API (`c_api.h`) → standalone WASM (82 KB, zero imports) for
-  the workshop; `adam-render` for headless renders. The JUCE AU comes after the
-  listening gate.
+  the workshop; `adam-render` for headless renders; **an AUv2 instrument for
+  Logic** (JUCE 9.0.4, `hosts/juce-au`), validated with `auval` and proven
+  sample-identical to the engine through the real plugin API.
 - **Workshop** (`workshop/src`): pattern + preset pickers, play/loop/tempo, all
   parameters live, meters, limiter and safety readout, spectrum + scope, an
   on-screen/computer keyboard, "Copy preset" for feedback.
@@ -41,7 +42,30 @@ build/native/adam-render --pattern fixtures/patterns/pad_chords.pat \
   --preset fixtures/presets/soft_pad.preset --loops 2 --out out/pad.wav
 python3 tools/gen_patterns.py   # regenerate fixtures/patterns + fixtures/midi
 scripts/stage.sh     # rebuild the workshop in place (staging serves dist/workshop)
+scripts/install-au.sh  # build + install the AU, auval, AU-vs-engine parity
 ```
+
+Work lands on `feature/audio-engine`; Sam PRs it to `main`.
+
+## Logic Pro
+
+`scripts/install-au.sh` builds **Adam Core Synth** (`aumu AdCs Adam`), copies
+it to `~/Library/Audio/Plug-Ins/Components`, rescans, runs `auval`, and renders
+four preset/pattern pairs through the installed AU (`adam-au-host`, the real
+plugin API) against the engine (`tools/compare_wav.py`, residual < −120 dB).
+In Logic: new Software Instrument track → AU Instruments → Adam → Adam Core
+Synth. Every parameter is automatable; the generic editor lists them all.
+
+**Adding another instrument as an AU:** write a descriptor (engine type +
+parameter table; see `hosts/juce-au/core_synth_plugin.cpp`) and one call:
+
+```cmake
+adam_add_audio_unit(AdamFoo PRODUCT_NAME "Adam Foo" PLUGIN_CODE AdFo
+                    SOURCE foo_plugin.cpp ENGINE_LIB adam_foo)
+```
+
+Never change a shipped `PLUGIN_CODE`, the manufacturer code `Adam`, or a
+parameter id: Logic projects key on them.
 
 Staged at `https://controlplane.samellgass.com/staging?port=8432` (the
 adamOS staging tool serves `dist/workshop`; a rebuild is live on reload).
