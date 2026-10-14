@@ -59,6 +59,13 @@ enum ParamId : uint16_t {
     kSpread,
     kPolyphony,
     kMasterGain,
+    // appended 2026-10-13 (ids above are frozen)
+    kFilterDrive,
+    kUnisonVoices,
+    kUnisonDetune,
+    kVibratoDepth,
+    kVibratoRate,
+    kVibratoDelay,
     kParamCount
 };
 

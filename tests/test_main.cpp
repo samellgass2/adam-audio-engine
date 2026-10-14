@@ -325,7 +325,7 @@ void test_patterns_render_clean() {
     // needs a NaN reset, and nothing is left sounding after stop + release.
     const char* patterns[] = {"pad_chords", "tight_chords", "lead_melody", "staccato",
                               "fast_repeats", "wide_arpeggio", "dense_overlap"};
-    const char* presets[] = {"init", "soft_pad", "bright_chords", "pluck"};
+    const char* presets[] = {"init", "soft_pad", "bright_chords", "supersaw", "pluck"};
     const float ceiling = std::pow(10.0f, -1.0f / 20.0f);
     for (const char* pre : presets) {
         for (const char* pat : patterns) {
@@ -640,6 +640,78 @@ void test_layers_stay_in_phase_and_bus_is_safe() {
     for (AdamSynth* s : layers) adam_synth_destroy(s);
 }
 
+void test_drive_unison_vibrato() {
+    // Drive — prediction: a sine through full drive grows odd harmonics
+    // (H3 > -20 dB) but stays symmetric (H2 < -40 dB); level rises < +6 dB.
+    auto sineNote = [&](float drive) {
+        CoreSynth s = makeSynth();
+        plainPatch(s, 0);
+        s.setParam(core_synth::kFilterDrive, drive);
+        s.snapSmoothing();
+        s.noteOn(57, 127);
+        const auto out = render(s, 32768);
+        return analysis::analyze(out.l.data() + 16384, out.r.data() + 16384, 8192, kSr);
+    };
+    const auto clean = sineNote(0), driven = sineNote(100);
+    std::printf("    drive: H3 %.1f -> %.1f dB, H2 %.1f dB, level %+.1f dB\n", clean.harmonicsDb[2],
+                driven.harmonicsDb[2], driven.harmonicsDb[1], driven.rmsDb - clean.rmsDb);
+    CHECK(clean.harmonicsDb[2] < -60, "clean H3 %.1f", clean.harmonicsDb[2]);
+    CHECK(driven.harmonicsDb[2] > -20, "driven H3 %.1f", driven.harmonicsDb[2]);
+    CHECK(driven.harmonicsDb[1] < -40, "driven H2 %.1f (should stay odd-only)", driven.harmonicsDb[1]);
+    CHECK(driven.rmsDb - clean.rmsDb < 6, "drive level jump %.1f", driven.rmsDb - clean.rmsDb);
+
+    // Unison — prediction: 7 voices detuned 30 cents smear energy between the
+    // harmonics (>= 10 dB more) at roughly the same loudness (+-3 dB).
+    auto sawNote = [&](int voices) {
+        CoreSynth s = makeSynth();
+        plainPatch(s, 2);
+        s.setParam(core_synth::kUnisonVoices, voices);
+        s.setParam(core_synth::kUnisonDetune, 30);
+        s.snapSmoothing();
+        s.noteOn(45, 127);
+        const auto out = render(s, 65536);
+        double e = 0;
+        for (size_t i = 16384; i < out.l.size(); ++i) e += double(out.l[i]) * out.l[i];
+        const auto p = analysis::powerSpectrum(out.l.data() + 16384, 32768);
+        return std::make_pair(10 * std::log10(e), analysis::inharmonicDb(p, 110.0, kSr, 32768, 2));
+    };
+    const auto one = sawNote(1), seven = sawNote(7);
+    std::printf("    unison 1 -> 7 voices: between-harmonic %.1f -> %.1f dB, level %+.1f dB\n", one.second,
+                seven.second, seven.first - one.first);
+    CHECK(seven.second > one.second + 10, "unison spread %.1f vs %.1f", seven.second, one.second);
+    CHECK(std::fabs(seven.first - one.first) < 3, "unison level %.1f dB", seven.first - one.first);
+
+    // Vibrato — prediction: depth 30 cents at 5 Hz swings the measured pitch
+    // by about +-30 cents; with a 1 s delay the first 300 ms stay within 3 cents.
+    auto pitchTrack = [&](float delayMs, int fromMs, int toMs) {
+        CoreSynth s = makeSynth();
+        plainPatch(s, 0);
+        s.setParam(core_synth::kVibratoDepth, 30);
+        s.setParam(core_synth::kVibratoRate, 5);
+        s.setParam(core_synth::kVibratoDelay, delayMs);
+        s.snapSmoothing();
+        s.noteOn(69, 127);
+        const auto out = render(s, static_cast<int>(kSr * 1.6));
+        double lo = 1e9, hi = -1e9;
+        for (int ms = fromMs; ms + 25 < toMs; ms += 5) {
+            const size_t at = static_cast<size_t>(ms * kSr / 1000);
+            const auto [f0, c] = analysis::yinPitch(out.l.data() + at, 1024, kSr);
+            if (c < 0.8) continue;
+            const double cents = 1200 * std::log2(f0 / 440.0);
+            lo = std::min(lo, cents);
+            hi = std::max(hi, cents);
+        }
+        return std::make_pair(lo, hi);
+    };
+    const auto swing = pitchTrack(1, 300, 1500);
+    const auto early = pitchTrack(1000, 20, 300);
+    std::printf("    vibrato: swing %.1f..%.1f cents; delayed first 300 ms %.1f..%.1f cents\n", swing.first,
+                swing.second, early.first, early.second);
+    CHECK(swing.first < -24 && swing.second > 24 && swing.first > -36 && swing.second < 36, "swing %.1f..%.1f",
+          swing.first, swing.second);
+    CHECK(early.first > -3 && early.second < 3, "delayed vibrato leaked %.1f..%.1f", early.first, early.second);
+}
+
 int main() {
     struct T {
         const char* name;
@@ -662,6 +734,7 @@ int main() {
         {"determinism_block_size", test_determinism_and_block_size},
         {"analysis_sees_what_is_there", test_analysis_sees_what_is_there},
         {"layers_in_phase_bus_safe", test_layers_stay_in_phase_and_bus_is_safe},
+        {"drive_unison_vibrato", test_drive_unison_vibrato},
     };
     const char* only = std::getenv("ADAM_TEST");
     for (auto& t : tests) {

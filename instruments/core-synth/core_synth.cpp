@@ -114,8 +114,17 @@ void CoreSynth::startVoice(Voice& v, int note, int velocity, bool fresh) {
     if (fresh) {
         v.filter.reset();
         // deterministic per-note phases keep renders reproducible
-        v.osc1.reset(0.0f);
-        v.osc2.reset(0.25f);
+        // [0] keeps the original phases (defaults render bit-identically); the
+        // unison copies are spread by the golden ratio so they never start
+        // in phase (no flam/comb on the attack)
+        for (int k = 0; k < kMaxUnison; ++k) {
+            const float g = static_cast<float>(k) * 0.6180339887f;
+            v.osc1[k].reset(g - std::floor(g));
+            const float g2 = 0.25f + static_cast<float>(k) * 0.3819660113f;
+            v.osc2[k].reset(g2 - std::floor(g2));
+        }
+        v.vibPhase = 0.0f;
+        v.vibAgeMs = 0.0f;
         v.pitch = glide ? lastNote_ : static_cast<float>(note);
     } else if (!glide) {
         v.pitch = static_cast<float>(note);
@@ -196,6 +205,11 @@ void CoreSynth::render(float* outL, float* outR, int frames) {
     const float glideMs = values_[kGlide];
     const float glideCoef = glideMs > 1.0f ? 1.0f - std::exp(-3.0f / (glideMs * 0.001f * sr_)) : 1.0f;
     const float invSr = 1.0f / sr_;
+    const int unison = std::clamp(static_cast<int>(values_[kUnisonVoices]), 1, kMaxUnison);
+    const float unisonNorm = 1.0f / std::sqrt(static_cast<float>(unison));  // incoherent sum
+    const float vibRateDt = values_[kVibratoRate] * invSr;
+    const float vibDelayMs = values_[kVibratoDelay];
+    const float msPerSample = 1000.0f * invSr;
 
     double sumL2 = 0.0, sumR2 = 0.0;
     float peakL = meter_.peakL, peakR = meter_.peakR;
@@ -217,6 +231,18 @@ void CoreSynth::render(float* outL, float* outR, int frames) {
         const float lfoCut = smooth_[kLfoCutoff].next();
         const float spread = smooth_[kSpread].next() * 0.01f;
         const float master = dsp::dbToGain(smooth_[kMasterGain].next());
+        const float drive = smooth_[kFilterDrive].next() * 0.01f;
+        const float uniDetune = smooth_[kUnisonDetune].next();
+        const float vibDepth = smooth_[kVibratoDepth].next();
+        smooth_[kVibratoRate].next();
+        // unison copies spread symmetrically across +-detune (cents -> ratio)
+        float uniRatio[kMaxUnison];
+        for (int k = 0; k < unison; ++k) {
+            const float off = unison > 1 ? uniDetune * (2.0f * k / (unison - 1) - 1.0f) : 0.0f;
+            uniRatio[k] = unison > 1 ? std::exp2(off / 1200.0f) : 1.0f;
+        }
+        const float driveK = 1.0f + 9.0f * drive;
+        const float driveNorm = drive > 0.0f ? 1.0f / std::tanh(driveK) : 1.0f;
 
         const float lfo = lfo_.next(lfoRate, sr_, lfoShape);
         const float lfoSemis = lfo * lfoPitch * 0.01f;
@@ -228,11 +254,35 @@ void CoreSynth::render(float* outL, float* outR, int frames) {
             Voice& v = voices_[i];
             if (!v.active()) continue;
             v.pitch += (static_cast<float>(v.note) - v.pitch) * glideCoef;
-            const float p1 = v.pitch + lfoSemis;
+            float vib = 0.0f;
+            if (vibDepth > 0.0f) {
+                // classic delayed vibrato: none for `delay`, then a fade-in over
+                // half that time (at least 50 ms)
+                const float fadeMs = std::max(50.0f, 0.5f * vibDelayMs);
+                const float fade = std::clamp((v.vibAgeMs - vibDelayMs) / fadeMs, 0.0f, 1.0f);
+                vib = std::sin(6.28318530718f * v.vibPhase) * vibDepth * 0.01f * fade;
+            }
+            v.vibPhase += vibRateDt;
+            if (v.vibPhase >= 1.0f) v.vibPhase -= 1.0f;
+            v.vibAgeMs += msPerSample;
+            const float p1 = v.pitch + lfoSemis + vib;
             const float p2 = p1 + semi2 + detune * 0.01f;
             const float dt1 = dsp::midiToHz(p1) * invSr;
             const float dt2 = dsp::midiToHz(p2) * invSr;
-            float s = (1.0f - mix) * v.osc1.next(w1, dt1, pw) + mix * v.osc2.next(w2, dt2, pw);
+            float a = 0.0f, b = 0.0f;
+            if (unison == 1) {
+                a = v.osc1[0].next(w1, dt1, pw);
+                b = v.osc2[0].next(w2, dt2, pw);
+            } else {
+                for (int k = 0; k < unison; ++k) {
+                    a += v.osc1[k].next(w1, dt1 * uniRatio[k], pw);
+                    b += v.osc2[k].next(w2, dt2 * uniRatio[k], pw);
+                }
+                a *= unisonNorm;
+                b *= unisonNorm;
+            }
+            float s = (1.0f - mix) * a + mix * b;
+            if (drive > 0.0f) s = std::tanh(driveK * s) * driveNorm;  // saturation before the filter
             s += noiseLvl * noise * 0.7f;
 
             const float fenv = v.filt.next();

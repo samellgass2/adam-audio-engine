@@ -25,7 +25,7 @@ if [[ -z "${SKIP_PARITY:-}" ]]; then
   cmake --build build/native --target adam-render >/dev/null
   host=build/au/hosts/juce-au/adam-au-host_artefacts/Release/adam-au-host
   mkdir -p out
-  for pair in "bright_chords tight_chords" "soft_pad pad_chords" "pluck staccato" "init dense_overlap"; do
+  for pair in "bright_chords tight_chords" "soft_pad pad_chords" "pluck staccato" "init dense_overlap" "supersaw tight_chords"; do
     read -r preset pattern <<<"$pair"
     ./build/native/adam-render --pattern "fixtures/patterns/$pattern.pat" --preset "fixtures/presets/$preset.preset" \
       --seconds 6 --tail 2 --out "out/native_$pattern.wav" >/dev/null

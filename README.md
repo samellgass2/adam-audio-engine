@@ -13,7 +13,8 @@ Audio Unit. Spec: adamOS `docs/specs/ADAM_AUDIO_ENGINE_2026_10_13.md`.
   (12/24 dB), filter + amp ADSR, LFO → pitch/cutoff, glide, 16-voice
   polyphony (8 default) with click-free stealing, sustain pedal, stereo spread,
   DC blocker and a −1 dBFS lookahead limiter with an intersample-aware
-  detector. 29 parameters, one contract (`params.cpp`).
+  detector; filter drive, 7-voice unison (supersaw), delayed vibrato. 35
+  parameters, one contract (`params.cpp`).
 - **One sequencer** (`dsp/include/adam/seq`): sample-accurate pattern playback
   on an integer sample clock, used by the renderer, the tests and the browser.
 - **Hosts:** a C API (`c_api.h`) → standalone WASM (82 KB, zero imports) for

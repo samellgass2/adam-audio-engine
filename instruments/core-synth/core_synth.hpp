@@ -19,6 +19,7 @@
 namespace adam::core_synth {
 
 constexpr int kMaxVoices = 16;
+constexpr int kMaxUnison = 7;
 
 struct Meter {
     float peakL = 0, peakR = 0;   // since the last read
@@ -58,7 +59,9 @@ public:
 
 private:
     struct Voice {
-        dsp::Oscillator osc1, osc2;
+        std::array<dsp::Oscillator, kMaxUnison> osc1, osc2;  // [0] = the plain voice
+        float vibPhase = 0.0f;      // per-note vibrato LFO
+        float vibAgeMs = 0.0f;      // time since note-on (vibrato fade-in)
         dsp::Adsr amp, filt;
         dsp::LowPass filter;
         int note = -1;

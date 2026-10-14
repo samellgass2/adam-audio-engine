@@ -1,0 +1,25 @@
+# Supersaw: 7-voice unison saws, a touch of drive, bright filter with a short snap.
+osc1_wave 2
+osc2_wave 2
+osc2_semi 12
+osc2_detune 0
+osc_mix 30
+unison_voices 7
+unison_detune 24
+filter_drive 18
+filter_cutoff 5200
+filter_resonance 15
+filter_slope 1
+filter_keytrack 50
+filter_env_amount 1.5
+filt_attack 2
+filt_decay 350
+filt_sustain 55
+filt_release 300
+amp_attack 4
+amp_decay 600
+amp_sustain 85
+amp_release 320
+velocity_sens 40
+spread 80
+master_gain -10

@@ -4,6 +4,29 @@ One entry per meaningful DSP change: what changed, what we expected to hear,
 what we measured, where the renders are, the human verdict, and the outcome.
 Newest first. "Awaiting listen" means no human has judged it yet.
 
+## 2026-10-13 — Drive, unison (supersaw), delayed vibrato
+
+- **Change:** six parameters appended (ids frozen above them):
+  `filter_drive` (tanh saturation before the filter, peak-normalised),
+  `unison_voices` 1–7 + `unison_detune` (symmetric spread, golden-ratio start
+  phases, 1/sqrt(N) incoherent-sum normalisation, applied to both
+  oscillators), `vibrato_depth`/`rate`/`delay` (per-note LFO: none for the
+  delay, then a fade-in over half of it). New preset `supersaw`.
+- **Expected:** drive = warmer/grittier via odd harmonics without a big
+  level jump; unison = thick, chorused, wide-sounding chords at similar
+  loudness; vibrato = singing pitch wobble that arrives after the delay.
+- **Measured:** drive 100% on a sine: H3 −113.8 → −9.8 dB, H2 stays −105 dB
+  (symmetric), level +2.7 dB. Unison 1 → 7 voices at 30 cents:
+  between-harmonic energy −19.2 → −7.6 dB, level +1.1 dB. Vibrato 30 cents at
+  5 Hz: pitch swings −29.8…+29.9 cents; with a 1 s delay the first 300 ms stay
+  at 0.1 cents (the first build ramped from note-on and leaked ±8 cents —
+  caught by this test, now classic delay-then-fade). Defaults render
+  bit-identically to before. Worst case (supersaw, dense clusters): 0.16 ms of
+  a 2.67 ms block natively; WASM 41× real time; WASM parity −98 dB (more libm
+  calls than before, still far below audibility); AU parity −124 dB; auval OK.
+- **Human verdict:** awaiting listen (workshop 8432 and Logic).
+- **Outcome:** accepted pending ears.
+
 ## 2026-10-13 — Analysis: what the agent sees (shared by tests, renderer, workshop)
 
 - **Change:** `adam::analysis` (FFT, YIN pitch, harmonics, centroid/rolloff/

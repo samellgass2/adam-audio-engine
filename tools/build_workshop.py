@@ -22,7 +22,7 @@ def main() -> None:
     shutil.copytree(ROOT / "fixtures" / "patterns", OUT / "patterns")
     (OUT / "presets").mkdir()
     presets = []
-    order = ["init", "soft_pad", "bright_chords", "pluck"]
+    order = ["init", "soft_pad", "bright_chords", "supersaw", "pluck"]
     files = sorted((ROOT / "fixtures" / "presets").glob("*.preset"),
                    key=lambda p: (order.index(p.stem) if p.stem in order else 99, p.stem))
     for f in files:

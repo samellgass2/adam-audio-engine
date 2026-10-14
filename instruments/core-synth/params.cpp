@@ -43,6 +43,13 @@ const ParamSpec kSpecs[kParamCount] = {
     {"spread",           "Stereo Spread",    "%",      "Voice",       Mapping::Linear, 0, 100, 30, 20, nullptr},
     {"polyphony",        "Voices",           "",       "Voice",       Mapping::Int, 1, 16, 8, 0, nullptr},
     {"master_gain",      "Master",           "dB",     "Output",      Mapping::Linear, -36, 6, -6, 20, nullptr},
+    // appended 2026-10-13 — never reorder: Logic sessions key on these ids
+    {"filter_drive",     "Drive",            "%",      "Filter",      Mapping::Linear, 0, 100, 0, 15, nullptr},
+    {"unison_voices",    "Unison Voices",    "",       "Unison",      Mapping::Int, 1, 7, 1, 0, nullptr},
+    {"unison_detune",    "Unison Detune",    "cents",  "Unison",      Mapping::Linear, 0, 100, 20, 20, nullptr},
+    {"vibrato_depth",    "Vibrato Depth",    "cents",  "Vibrato",     Mapping::Linear, 0, 50, 0, 20, nullptr},
+    {"vibrato_rate",     "Vibrato Rate",     "Hz",     "Vibrato",     Mapping::Log, 0.5f, 12, 5.5f, 20, nullptr},
+    {"vibrato_delay",    "Vibrato Delay",    "ms",     "Vibrato",     Mapping::Log, 1, 3000, 250, 0, nullptr},
 };
 // clang-format on
 
