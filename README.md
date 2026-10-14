@@ -23,6 +23,11 @@ Audio Unit. Spec: adamOS `docs/specs/ADAM_AUDIO_ENGINE_2026_10_13.md`.
 - **Workshop** (`workshop/src`): pattern + preset pickers, play/loop/tempo, all
   parameters live, meters, limiter and safety readout, spectrum + scope, an
   on-screen/computer keyboard, "Copy preset" for feedback.
+- **What the agent sees** (`dsp/include/adam/analysis`): pitch (YIN),
+  harmonic profile H1–H12, spectral centroid/rolloff/flatness, band shares,
+  crest, stereo correlation, between-harmonic (aliasing) energy — one
+  implementation used by the tests, `adam-render`'s JSON report and the
+  workshop's live panel (via WASM), so ears and numbers can be compared.
 - **Evidence:** `adam-tests` (661 checks on rendered audio) and a native↔WASM
   parity check (residual −125 dB).
 

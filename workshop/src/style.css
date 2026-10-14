@@ -96,3 +96,11 @@ canvas { width: 100%; background: var(--panel-2); border-radius: 6px; display: b
   border-radius: 0 0 4px 4px;
 }
 .key.down { background: var(--accent) !important; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.metric { background: var(--panel-2); border-radius: 8px; padding: 8px; }
+.metric .k { font-size: 11px; color: var(--muted); }
+.metric .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric .d { font-size: 11px; color: var(--muted); }
+.agent-charts { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+#harmonics, #bands { height: 120px; }

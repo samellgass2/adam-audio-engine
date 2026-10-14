@@ -240,7 +240,91 @@ async function startAudio() {
   requestAnimationFrame(draw);
 }
 
+// ------------------------------------------------- what the agent sees
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+let lastAnalysis = null;
+
+function analyzeSnapshot(l, r) {
+  const { w } = state.mirror;
+  const MAX = 16384;
+  const input = new Float32Array(w.memory.buffer, w.adam_analysis_input(), 2 * MAX);
+  input.set(l, 0);
+  input.set(r, MAX);
+  const o = new Float32Array(w.memory.buffer, w.adam_analyze(l.length, state.ctx.sampleRate), 29);
+  const a = {
+    peakDb: o[0], rmsDb: o[1], crestDb: o[2], dc: o[3], centroidHz: o[4], rolloffHz: o[5], flatness: o[6],
+    f0Hz: o[7], f0Confidence: o[8], f0Midi: o[9], inharmonicDb: o[10], bands: Array.from(o.subarray(11, 15)),
+    stereo: o[15], harmonics: Array.from(o.subarray(17, 17 + o[16])),
+  };
+  lastAnalysis = a;
+  renderAnalysis(a);
+}
+
+const hz = (f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${Math.round(f)} Hz`);
+
+function renderAnalysis(a) {
+  const silent = a.rmsDb < -70;
+  const metrics = [];
+  if (silent) {
+    metrics.push(["Signal", "silence", "play something"]);
+  } else {
+    if (a.f0Hz > 0 && a.f0Confidence > 0.6) {
+      const midi = Math.round(a.f0Midi);
+      const cents = Math.round((a.f0Midi - midi) * 100);
+      metrics.push([
+        "Pitch (YIN)",
+        `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1} ${cents >= 0 ? "+" : ""}${cents}¢`,
+        `${a.f0Hz.toFixed(1)} Hz · confidence ${(a.f0Confidence * 100).toFixed(0)}%`,
+      ]);
+      metrics.push([
+        "Between-harmonic energy",
+        `${a.inharmonicDb.toFixed(1)} dB`,
+        "aliasing + noise on a HELD SINGLE note (lower = cleaner); chords and note changes raise it",
+      ]);
+    } else {
+      metrics.push(["Pitch (YIN)", "—", "no single pitch (a chord or noise)"]);
+    }
+    metrics.push(["Brightness (centroid)", hz(a.centroidHz), "where the spectrum's weight sits; higher = brighter"]);
+    metrics.push(["Rolloff (85% energy)", hz(a.rolloffHz), "85% of the energy is below this"]);
+    metrics.push(["Level", `${a.rmsDb.toFixed(1)} dB RMS`, `peak ${a.peakDb.toFixed(1)} dBFS`]);
+    metrics.push(["Crest factor", `${a.crestDb.toFixed(1)} dB`, "peak over RMS; high = punchy/spiky, low = dense"]);
+    metrics.push(["Noisiness (flatness)", a.flatness.toFixed(3), "0 = pure tones, 1 = white noise"]);
+    metrics.push(["Stereo correlation", a.stereo.toFixed(2), "+1 mono · 0 wide · <0 phasey"]);
+  }
+  $("metrics").innerHTML = metrics
+    .map(([k, v, d]) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`)
+    .join("");
+  drawBars($("harmonics"), silent || !(a.f0Confidence > 0.6) ? [] : a.harmonics, (i) => `${i + 1}`, -60);
+  drawBars($("bands"), silent ? [] : a.bands, (i) => ["<200", "200–2k", "2k–8k", ">8k"][i], -60);
+}
+
+function drawBars(canvas, values, label, floorDb) {
+  const { g, w, h } = canvasCtx(canvas);
+  const dpr = window.devicePixelRatio || 1;
+  g.font = `${10 * dpr}px sans-serif`;
+  g.fillStyle = css("--muted");
+  if (!values.length) {
+    g.fillText("—", 8 * dpr, h / 2);
+    return;
+  }
+  const slot = w / values.length;
+  values.forEach((db, i) => {
+    const frac = Math.max(0, Math.min(1, (db - floorDb) / -floorDb));
+    const bh = frac * (h - 16 * dpr);
+    g.fillStyle = css("--accent");
+    g.fillRect(i * slot + slot * 0.15, h - 14 * dpr - bh, slot * 0.7, bh);
+    g.fillStyle = css("--muted");
+    g.fillText(label(i), i * slot + slot * 0.15, h - 2 * dpr);
+    if (values.length <= 4) g.fillText(`${db.toFixed(0)} dB`, i * slot + slot * 0.15, h - 18 * dpr - bh);
+  });
+}
+
 function onWorkletMessage(m) {
+  if (m.type === "snapshot") {
+    // the most recent ~85 ms: short enough to hold one note of a melody
+    analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096));
+    return;
+  }
   if (m.type !== "meter") return;
   const db = (x) => (x > 1e-6 ? 20 * Math.log10(x) : -120);
   const h = (x) => `${Math.max(0, Math.min(100, ((db(x) + 60) / 60) * 100))}%`;

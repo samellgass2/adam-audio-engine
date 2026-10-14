@@ -5,6 +5,7 @@
 #include "adam/seq/sequencer.hpp"
 #include "core_synth.hpp"
 #include "preset.hpp"
+#include "adam/analysis/analysis.hpp"
 
 using adam::core_synth::CoreSynth;
 using adam::core_synth::ParamId;
@@ -118,6 +119,26 @@ char* adam_text_buffer(AdamSynth* s, int min_size) {
 
 float* adam_synth_out_left(AdamSynth* s) { return s ? s->left : nullptr; }
 float* adam_synth_out_right(AdamSynth* s) { return s ? s->right : nullptr; }
+
+static float g_analysisIn[2 * ADAM_ANALYSIS_MAX];
+static float g_analysisOut[ADAM_ANALYSIS_FIELDS];
+
+float* adam_analysis_input(void) { return g_analysisIn; }
+
+float* adam_analyze(int frames, float sample_rate) {
+    size_t n = 1;
+    while (n * 2 <= static_cast<size_t>(frames) && n * 2 <= ADAM_ANALYSIS_MAX) n *= 2;
+    const auto r = adam::analysis::analyze(g_analysisIn, g_analysisIn + ADAM_ANALYSIS_MAX, n, sample_rate);
+    float* o = g_analysisOut;
+    const double head[] = {r.peakDb, r.rmsDb, r.crestDb, r.dc, r.centroidHz, r.rolloffHz, r.flatness,
+                           r.f0Hz, r.f0Confidence, r.f0Midi, r.inharmonicDb};
+    for (int i = 0; i < 11; ++i) o[i] = static_cast<float>(head[i]);
+    for (int i = 0; i < 4; ++i) o[11 + i] = static_cast<float>(r.bandDb[i]);
+    o[15] = static_cast<float>(r.stereoCorrelation);
+    o[16] = static_cast<float>(r.harmonicCount);
+    for (int i = 0; i < 12; ++i) o[17 + i] = static_cast<float>(r.harmonicsDb[i]);
+    return o;
+}
 
 float* adam_synth_read_meter(AdamSynth* s) {
     if (!s) return nullptr;

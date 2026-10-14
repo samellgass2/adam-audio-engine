@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "adam/analysis/analysis.hpp"
 #include "adam/dsp/limiter.hpp"
 #include "adam/dsp/oscillator.hpp"
 #include "adam/seq/sequencer.hpp"
@@ -102,58 +103,11 @@ double zeroCrossingHz(const std::vector<float>& x, size_t from, float sr) {
     return count > 0 ? count * sr / (last - first) : 0.0;
 }
 
-void fft(std::vector<std::complex<double>>& a) {
-    const size_t n = a.size();
-    for (size_t i = 1, j = 0; i < n; ++i) {
-        size_t bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) std::swap(a[i], a[j]);
-    }
-    for (size_t len = 2; len <= n; len <<= 1) {
-        const double ang = -2 * M_PI / len;
-        const std::complex<double> wl(std::cos(ang), std::sin(ang));
-        for (size_t i = 0; i < n; i += len) {
-            std::complex<double> w(1);
-            for (size_t j = 0; j < len / 2; ++j) {
-                auto u = a[i + j], v = a[i + j + len / 2] * w;
-                a[i + j] = u + v;
-                a[i + j + len / 2] = u - v;
-                w *= wl;
-            }
-        }
-    }
-}
-
-// Blackman-Harris power spectrum of x[from, from+n).
+// Shared analysis (the same code the renderer report and the workshop use).
 std::vector<double> powerSpectrum(const std::vector<float>& x, size_t from, size_t n) {
-    std::vector<std::complex<double>> a(n);
-    for (size_t i = 0; i < n; ++i) {
-        const double w = 0.35875 - 0.48829 * std::cos(2 * M_PI * i / (n - 1)) +
-                         0.14128 * std::cos(4 * M_PI * i / (n - 1)) - 0.01168 * std::cos(6 * M_PI * i / (n - 1));
-        a[i] = x[from + i] * w;
-    }
-    fft(a);
-    std::vector<double> p(n / 2);
-    for (size_t i = 0; i < n / 2; ++i) p[i] = std::norm(a[i]);
-    return p;
+    return analysis::powerSpectrum(x.data() + from, n);
 }
-
-// Energy within +-`halfWidth` bins of any harmonic of f0, vs everything else
-// (between 20 Hz and 20 kHz). Returns non-harmonic / harmonic in dB: lower is
-// cleaner; aliasing is what lands between the harmonics.
-double inharmonicDb(const std::vector<double>& p, double f0, float sr, size_t n, int halfWidth = 6) {
-    double harm = 0, other = 0;
-    const double binHz = sr / n;
-    for (size_t k = 1; k < p.size(); ++k) {
-        const double f = k * binHz;
-        if (f < 20 || f > 20000) continue;
-        const double h = f / f0;
-        const double dist = std::fabs(h - std::round(h)) * f0 / binHz;
-        (std::round(h) >= 1 && dist <= halfWidth ? harm : other) += p[k];
-    }
-    return 10 * std::log10(other / std::max(harm, 1e-30));
-}
+using analysis::inharmonicDb;
 
 std::string readFixture(const std::string& rel) {
     std::ifstream f(std::string(ADAM_FIXTURES_DIR) + "/" + rel);
@@ -586,6 +540,43 @@ void test_determinism_and_block_size() {
     CHECK(maxDiff < 1e-6, "block-size dependence %.2e", maxDiff);
 }
 
+void test_analysis_sees_what_is_there() {
+    // Prediction: the analyzer reads a pure tone's pitch to 0.1%, a sine has
+    // no harmonics (H2 < -60 dB), a saw's harmonics fall as 1/n (H2 ~ -6 dB,
+    // H3 ~ -9.5 dB), a closed filter lowers the centroid, mono reads +1.
+    const size_t n = 8192;
+    auto tone = [&](dsp::Wave w, double f) {
+        std::vector<float> x(n);
+        dsp::Oscillator o;
+        for (auto& v : x) v = 0.5f * o.next(w, static_cast<float>(f / kSr));
+        return x;
+    };
+    const auto sine = tone(dsp::Wave::Sine, 440.0);
+    auto r = analysis::analyze(sine.data(), sine.data(), n, kSr);
+    CHECK(std::fabs(r.f0Hz - 440.0) < 0.44, "sine f0 %.3f", r.f0Hz);
+    CHECK(r.f0Confidence > 0.9, "sine confidence %.2f", r.f0Confidence);
+    CHECK(r.harmonicsDb[1] < -60, "sine H2 %.1f", r.harmonicsDb[1]);
+    CHECK(std::fabs(r.stereoCorrelation - 1.0) < 1e-6, "mono corr %.3f", r.stereoCorrelation);
+    const auto saw = tone(dsp::Wave::Saw, 220.0);
+    r = analysis::analyze(saw.data(), saw.data(), n, kSr);
+    std::printf("    saw 220 Hz: f0 %.2f, H2 %.2f dB, H3 %.2f dB, centroid %.0f Hz\n", r.f0Hz, r.harmonicsDb[1],
+                r.harmonicsDb[2], r.centroidHz);
+    CHECK(std::fabs(r.harmonicsDb[1] + 6.02) < 0.5 && std::fabs(r.harmonicsDb[2] + 9.54) < 0.5, "saw H2 %.2f H3 %.2f",
+          r.harmonicsDb[1], r.harmonicsDb[2]);
+    auto centroidAt = [&](float cutoff) {
+        CoreSynth s = makeSynth();
+        plainPatch(s, 2);
+        s.setParam(core_synth::kFilterCutoff, cutoff);
+        s.snapSmoothing();
+        s.noteOn(45, 100);
+        const auto out = render(s, 24000);
+        return analysis::analyze(out.l.data() + 8000, out.r.data() + 8000, n, kSr).centroidHz;
+    };
+    const double dark = centroidAt(400), bright = centroidAt(8000);
+    std::printf("    centroid: cutoff 400 Hz -> %.0f Hz, 8 kHz -> %.0f Hz\n", dark, bright);
+    CHECK(bright > 2 * dark, "centroid dark %.0f bright %.0f", dark, bright);
+}
+
 int main() {
     struct T {
         const char* name;
@@ -606,6 +597,7 @@ int main() {
         {"dc_and_pulse", test_dc_and_pulse},
         {"limiter_intersample", test_limiter_intersample},
         {"determinism_block_size", test_determinism_and_block_size},
+        {"analysis_sees_what_is_there", test_analysis_sees_what_is_there},
     };
     const char* only = std::getenv("ADAM_TEST");
     for (auto& t : tests) {

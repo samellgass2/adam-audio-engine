@@ -58,6 +58,19 @@ int adam_seq_playing(AdamSynth* s);
 /* Scratch buffer for passing text in (e.g. a pattern from JS). */
 char* adam_text_buffer(AdamSynth* s, int min_size);
 
+/* Analysis — what an agent sees (dsp/include/adam/analysis). Write up to
+ * ADAM_ANALYSIS_MAX frames of L and R into adam_analysis_input(), then call
+ * adam_analyze(frames, sample_rate) (frames a power of two). Returns a
+ * pointer to ADAM_ANALYSIS_FIELDS floats:
+ *  0 peakDb  1 rmsDb  2 crestDb  3 dc  4 centroidHz  5 rolloffHz  6 flatness
+ *  7 f0Hz  8 f0Confidence  9 f0Midi  10 inharmonicDb  11..14 band share dB
+ *  (<200, 200-2k, 2k-8k, >8k)  15 stereoCorrelation  16 harmonicCount
+ *  17..28 harmonics H1..H12 dB rel. H1 */
+#define ADAM_ANALYSIS_MAX 16384
+#define ADAM_ANALYSIS_FIELDS 29
+float* adam_analysis_input(void); /* [L x MAX][R x MAX] */
+float* adam_analyze(int frames, float sample_rate);
+
 /* Meter snapshot, written into the handle's meter array (read + clear):
  * [peakL, peakR, rmsL, rmsR, gainReductionDb, activeVoices, backstopHits,
  *  nonFiniteResets]. */

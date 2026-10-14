@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "adam/analysis/analysis.hpp"
 #include "c_api.h"
 #include "params.hpp"
 
@@ -161,6 +162,22 @@ int main(int argc, char** argv) {
     const float* m = adam_synth_read_meter(s);
     writeWav(out, inter, sr);
 
+    // What the agent sees: the analysis of the loudest 8192-sample moment.
+    const size_t win = 8192;
+    std::vector<float> wl(win), wr(win);
+    size_t bestAt = 0;
+    double bestE = -1;
+    for (size_t at = 0; at + win <= static_cast<size_t>(totalFrames); at += win / 2) {
+        double e = 0;
+        for (size_t i = 0; i < win; i += 4) e += double(inter[(at + i) * 2]) * inter[(at + i) * 2];
+        if (e > bestE) { bestE = e; bestAt = at; }
+    }
+    for (size_t i = 0; i < win && (bestAt + i) < static_cast<size_t>(totalFrames); ++i) {
+        wl[i] = inter[(bestAt + i) * 2];
+        wr[i] = inter[(bestAt + i) * 2 + 1];
+    }
+    const auto an = adam::analysis::analyze(wl.data(), wr.data(), win, sr);
+
     const double N = static_cast<double>(totalFrames);
     const double audioMs = 1000.0 * N / sr;
     FILE* js = std::fopen(stats.c_str(), "w");
@@ -172,11 +189,22 @@ int main(int argc, char** argv) {
                      "  \"dc_l\": %.6f,\n  \"dc_r\": %.6f,\n  \"max_gain_reduction_db\": %.3f,\n"
                      "  \"backstop_hits\": %.0f,\n  \"nonfinite_voice_resets\": %.0f,\n"
                      "  \"nonfinite_samples\": %ld,\n  \"realtime_factor\": %.1f,\n"
-                     "  \"worst_block_ms\": %.4f,\n  \"block_budget_ms\": %.4f\n}\n",
+                     "  \"worst_block_ms\": %.4f,\n  \"block_budget_ms\": %.4f,\n",
                      pattern.c_str(), preset.c_str(), sr, block, bpm, totalFrames, N / sr,
                      20 * std::log10(std::max(peak, 1e-9f)), 10 * std::log10(std::max(sumL2 / N, 1e-18)),
                      10 * std::log10(std::max(sumR2 / N, 1e-18)), sumL / N, sumR / N, maxGr, m[6], m[7],
                      nonFinite, audioMs / std::max(wallMs, 1e-6), worstBlockMs, 1000.0 * block / sr);
+        std::fprintf(js,
+                     "  \"analysis\": {\n    \"window_start_s\": %.3f,\n    \"centroid_hz\": %.1f,\n"
+                     "    \"rolloff_hz\": %.1f,\n    \"flatness\": %.4f,\n    \"crest_db\": %.2f,\n"
+                     "    \"f0_hz\": %.2f,\n    \"f0_confidence\": %.3f,\n    \"inharmonic_db\": %.1f,\n"
+                     "    \"band_share_db\": [%.1f, %.1f, %.1f, %.1f],\n    \"stereo_correlation\": %.3f,\n"
+                     "    \"harmonics_db\": [",
+                     bestAt / double(sr), an.centroidHz, an.rolloffHz, an.flatness, an.crestDb, an.f0Hz,
+                     an.f0Confidence, an.inharmonicDb, an.bandDb[0], an.bandDb[1], an.bandDb[2], an.bandDb[3],
+                     an.stereoCorrelation);
+        for (int h = 0; h < an.harmonicCount; ++h) std::fprintf(js, "%s%.1f", h ? ", " : "", an.harmonicsDb[h]);
+        std::fprintf(js, "]\n  }\n}\n");
         std::fclose(js);
     }
     std::printf("%s  peak %.2f dBFS  rms %.1f dBFS  %.0fx realtime\n", out.c_str(),

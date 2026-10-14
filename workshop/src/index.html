@@ -70,6 +70,24 @@
       </div>
     </section>
 
+    <section class="card agent">
+      <div class="row between">
+        <h2>What the agent sees</h2>
+        <span class="hint">the same measurements the tests and renders report · last 85 ms</span>
+      </div>
+      <div class="metrics" id="metrics"></div>
+      <div class="agent-charts">
+        <div>
+          <div class="hint">Harmonics H1–H12 (dB vs H1) — a saw falls as 1/n, a square skips evens</div>
+          <canvas id="harmonics"></canvas>
+        </div>
+        <div>
+          <div class="hint">Energy by band — where the sound's weight sits</div>
+          <canvas id="bands"></canvas>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="row between">
         <h2>Play it</h2>

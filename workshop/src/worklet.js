@@ -13,6 +13,10 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     if (this.wasm._initialize) this.wasm._initialize();
     this.synth = this.wasm.adam_synth_create(sampleRate);
     this.blocks = 0;
+    // last 8192 samples for the analysis panel (copied off the audio thread)
+    this.ringL = new Float32Array(8192);
+    this.ringR = new Float32Array(8192);
+    this.ringPos = 0;
     this.port.onmessage = (e) => this.onMessage(e.data);
     this.port.postMessage({ type: "ready", sampleRate });
   }
@@ -66,6 +70,21 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     const buf = w.memory.buffer;
     out[0].set(new Float32Array(buf, w.adam_synth_out_left(this.synth), frames));
     if (out[1]) out[1].set(new Float32Array(buf, w.adam_synth_out_right(this.synth), frames));
+    const R = out[1] || out[0];
+    for (let i = 0; i < frames; i++) {
+      this.ringL[this.ringPos] = out[0][i];
+      this.ringR[this.ringPos] = R[i];
+      this.ringPos = (this.ringPos + 1) & 8191;
+    }
+    if (this.blocks % 90 === 0) {
+      // ~4 snapshots a second, oldest sample first
+      const l = new Float32Array(8192), r = new Float32Array(8192);
+      l.set(this.ringL.subarray(this.ringPos));
+      l.set(this.ringL.subarray(0, this.ringPos), 8192 - this.ringPos);
+      r.set(this.ringR.subarray(this.ringPos));
+      r.set(this.ringR.subarray(0, this.ringPos), 8192 - this.ringPos);
+      this.port.postMessage({ type: "snapshot", l, r }, [l.buffer, r.buffer]);
+    }
 
     // ~30 meter updates a second
     if (++this.blocks % 12 === 0) {

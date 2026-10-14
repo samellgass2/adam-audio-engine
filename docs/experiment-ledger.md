@@ -4,6 +4,23 @@ One entry per meaningful DSP change: what changed, what we expected to hear,
 what we measured, where the renders are, the human verdict, and the outcome.
 Newest first. "Awaiting listen" means no human has judged it yet.
 
+## 2026-10-13 — Analysis: what the agent sees (shared by tests, renderer, workshop)
+
+- **Change:** `adam::analysis` (FFT, YIN pitch, harmonics, centroid/rolloff/
+  flatness, bands, crest, stereo, between-harmonic energy); C API
+  `adam_analyze`; renderer JSON `analysis` block (loudest 8192 samples);
+  workshop panel on the most recent 85 ms.
+- **Expected:** the numbers a human sees are the agent's numbers, and they
+  track what is heard (cutoff down -> centroid down; saw H_n = -20log10 n).
+- **Measured:** sine 440 Hz read to 0.1%, H2 < -60 dB; saw 220 Hz H2 -6.02,
+  H3 -9.55 dB (theory -6.02 / -9.54); centroid 198 Hz -> 1474 Hz as cutoff
+  goes 400 Hz -> 8 kHz. Two analyzer bugs caught by these tests: max-bin
+  harmonic levels suffered scalloping (now main-lobe sums), and a power-
+  weighted centroid over-weighted the fundamental (now magnitude, as librosa;
+  rolloff likewise, so centroid < rolloff reads sensibly).
+- **Human verdict:** awaiting Sam — does "brightness" move the way the sound does?
+- **Outcome:** accepted.
+
 ## 2026-10-13 — Logic AU (checkpoint 4, engineering half)
 
 - **Change:** generic JUCE wrapper (`AdamInstrumentProcessor<Descriptor>`) +
