@@ -18,6 +18,7 @@
 #include "adam/seq/sequencer.hpp"
 #include "c_api.h"
 #include "core_synth.hpp"
+#include "drum_kit.hpp"
 #include "params.hpp"
 #include "preset.hpp"
 
@@ -712,6 +713,132 @@ void test_drive_unison_vibrato() {
     CHECK(early.first > -3 && early.second < 3, "delayed vibrato leaked %.1f..%.1f", early.first, early.second);
 }
 
+void test_drum_kit() {
+    namespace dk = drum_kit;
+    auto hit = [](dk::DrumKit& kit, int note, int vel, int frames) {
+        kit.noteOn(note, vel);
+        std::vector<float> l(frames), r(frames);
+        for (int i = 0; i < frames; i += 128) kit.render(l.data() + i, r.data() + i, std::min(128, frames - i));
+        return l;
+    };
+    // Kick — prediction: it starts high (the punch) and settles toward the
+    // tuned pitch; it has decayed 40+ dB by its decay time.
+    {
+        dk::DrumKit kit;
+        kit.prepare(kSr);
+        kit.setParam(dk::kHumanize, 0);
+        kit.setParam(dk::kKickClick, 0);
+        const auto x = hit(kit, 36, 127, static_cast<int>(kSr));
+        const auto early = analysis::yinPitch(x.data() + 96, 2048, kSr, 30, 1500);
+        const auto late = analysis::yinPitch(x.data() + 9600, 4096, kSr, 30, 400);
+        const double peakEarly = peakOf(std::vector<float>(x.begin(), x.begin() + 4800));
+        const double tailAt = peakOf(std::vector<float>(x.begin() + 20160, x.begin() + 20640));  // ~420 ms
+        std::printf("    kick: %.0f Hz at the hit -> %.1f Hz after 200 ms (tune 50); %.1f dB down at 420 ms\n", early.first,
+                    late.first, 20 * std::log10(tailAt / peakEarly));
+        CHECK(early.first > 80 && std::fabs(late.first - 50) < 4, "kick pitch %.1f -> %.1f", early.first, late.first);
+        CHECK(20 * std::log10(tailAt / peakEarly) < -40, "kick decay");
+    }
+    // Liveness — prediction: with humanize 0 two identical hits are identical;
+    // with humanize they differ; harder hits are brighter (higher centroid).
+    {
+        auto twoHits = [&](float humanize) {
+            dk::DrumKit kit;
+            kit.prepare(kSr);
+            kit.setParam(dk::kHumanize, humanize);
+            const auto a = hit(kit, 38, 100, 9600);
+            std::vector<float> gl(48000), gr(48000);  // let the tail and the limiter's delay clear
+            kit.render(gl.data(), gr.data(), 48000);
+            const auto b = hit(kit, 38, 100, 9600);
+            double d = 0;
+            for (size_t i = 0; i < a.size(); ++i) d = std::max(d, double(std::fabs(a[i] - b[i])));
+            return d;
+        };
+        CHECK(twoHits(0) < 1e-6, "humanize 0 not identical: %.2e", twoHits(0));
+        CHECK(twoHits(60) > 1e-3, "humanize did not vary the hit: %.2e", twoHits(60));
+        auto centroid = [&](int vel) {
+            dk::DrumKit kit;
+            kit.prepare(kSr);
+            kit.setParam(dk::kHumanize, 0);
+            const auto x = hit(kit, 38, vel, 8192);
+            return analysis::analyze(x.data(), x.data(), 8192, kSr).centroidHz;
+        };
+        const double soft = centroid(40), hard = centroid(127);
+        std::printf("    snare centroid: velocity 40 -> %.0f Hz, 127 -> %.0f Hz\n", soft, hard);
+        CHECK(hard > soft * 1.15, "velocity timbre %.0f vs %.0f", hard, soft);
+    }
+    // Choke — prediction: a closed hat silences a ringing open hat.
+    {
+        dk::DrumKit kit;
+        kit.prepare(kSr);
+        hit(kit, 46, 110, 2400);
+        CHECK(kit.readMeter().activeVoices == 1, "open hat rings");
+        kit.noteOn(42, 1);
+        std::vector<float> l(9600), r(9600);
+        kit.render(l.data(), r.data(), 9600);
+        CHECK(kit.readMeter().activeVoices == 0, "closed hat did not choke the open one");
+    }
+    // Safety — every beat x every kit, and randomized extremes, stay finite,
+    // <= -1 dBFS, backstop never engaged.
+    const float ceiling = std::pow(10.0f, -1.0f / 20.0f);
+    for (const char* pre : {"drums_tight", "drums_boomy", "drums_crisp"}) {
+        for (const char* pat : {"drums_rock", "drums_house", "drums_halftime"}) {
+            AdamSynth* s = adam_instrument_create(ADAM_INSTRUMENT_DRUMS, kSr);
+            CHECK(adam_synth_apply_preset(s, readFixture(std::string("presets/") + pre + ".preset").c_str()) > 5, "%s", pre);
+            CHECK(adam_seq_load(s, readFixture(std::string("patterns/") + pat + ".pat").c_str()) > 0, "%s", pat);
+            adam_seq_set_bpm(s, adam_seq_pattern_bpm(s));
+            adam_seq_play(s, 1);
+            float peak = 0;
+            bool finite = true;
+            double energy = 0;
+            for (int b = 0; b < 3000; ++b) {
+                adam_synth_render(s, 128);
+                for (int i = 0; i < 128; ++i) {
+                    const float v = adam_synth_out_left(s)[i];
+                    finite = finite && std::isfinite(v);
+                    peak = std::max(peak, std::fabs(v));
+                    energy += double(v) * v;
+                }
+            }
+            const float* m = adam_synth_read_meter(s);
+            CHECK(finite && peak <= ceiling * 1.0001f && m[6] == 0 && energy > 1, "%s/%s peak %.3f backstop %g", pre, pat,
+                  peak, m[6]);
+            adam_synth_destroy(s);
+        }
+    }
+    uint32_t rng = 777;
+    auto rnd = [&]() {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        return (rng & 0xFFFFFF) / float(0xFFFFFF);
+    };
+    for (int trial = 0; trial < 30; ++trial) {
+        dk::DrumKit kit;
+        kit.prepare(trial % 2 ? 44100.0f : 96000.0f);
+        for (int i = 0; i < dk::kParamCount; ++i) {
+            float u = rnd();
+            u = u < 0.2f ? 0 : (u > 0.8f ? 1 : u);
+            kit.setParam(i, params::toPhysical(dk::paramSpecs()[i], u));
+        }
+        kit.setParam(dk::kKitGain, 6);
+        std::vector<float> l(1024), r(1024);
+        float peak = 0;
+        bool finite = true;
+        for (int b = 0; b < 200; ++b) {
+            for (int n : {36, 38, 39, 42, 46, 41, 45, 48, 37})
+                if (rnd() < 0.3f) kit.noteOn(n, 1 + static_cast<int>(rnd() * 126));
+            const int n = 1 + static_cast<int>(rnd() * 1023);
+            kit.render(l.data(), r.data(), n);
+            for (int i = 0; i < n; ++i) {
+                finite = finite && std::isfinite(l[i]) && std::isfinite(r[i]);
+                peak = std::max(peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
+            }
+        }
+        CHECK(finite && peak <= ceiling * 1.0001f && kit.readMeter().backstopHits == 0, "drum trial %d peak %.3f", trial,
+              peak);
+    }
+}
+
 int main() {
     struct T {
         const char* name;
@@ -735,6 +862,7 @@ int main() {
         {"analysis_sees_what_is_there", test_analysis_sees_what_is_there},
         {"layers_in_phase_bus_safe", test_layers_stay_in_phase_and_bus_is_safe},
         {"drive_unison_vibrato", test_drive_unison_vibrato},
+        {"drum_kit", test_drum_kit},
     };
     const char* only = std::getenv("ADAM_TEST");
     for (auto& t : tests) {

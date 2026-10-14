@@ -53,110 +53,18 @@ const ParamSpec kSpecs[kParamCount] = {
 };
 // clang-format on
 
-int choiceCount(const ParamSpec& s) { return static_cast<int>(s.max - s.min) + 1; }
-
-void appendEscaped(std::string& out, const char* text) {
-    out += '"';
-    for (const char* c = text; c && *c; ++c) {
-        if (*c == '"' || *c == '\\') out += '\\';
-        out += *c;
-    }
-    out += '"';
-}
-
 }  // namespace
 
 const ParamSpec& paramSpec(ParamId id) { return kSpecs[id < kParamCount ? id : 0]; }
-
+const ParamSpec* paramSpecs() { return kSpecs; }
 size_t paramCount() { return kParamCount; }
-
-int paramIndexForId(const char* id) {
-    for (int i = 0; i < kParamCount; ++i)
-        if (std::strcmp(kSpecs[i].id, id) == 0) return i;
-    return -1;
-}
-
-float clampPhysical(ParamId id, float physical) {
-    const ParamSpec& s = paramSpec(id);
-    if (!std::isfinite(physical)) return s.def;
-    float v = std::clamp(physical, s.min, s.max);
-    if (s.mapping == Mapping::Int || s.mapping == Mapping::Choice) v = std::round(v);
-    return v;
-}
-
-float toPhysical(ParamId id, float n) {
-    const ParamSpec& s = paramSpec(id);
-    if (!std::isfinite(n)) return s.def;
-    n = std::clamp(n, 0.0f, 1.0f);
-    switch (s.mapping) {
-        case Mapping::Log: return s.min * std::pow(s.max / s.min, n);
-        case Mapping::Int: return std::round(s.min + n * (s.max - s.min));
-        case Mapping::Choice: {
-            const int count = choiceCount(s);
-            return s.min + std::min(count - 1, static_cast<int>(n * count));
-        }
-        case Mapping::Linear:
-        default: return s.min + n * (s.max - s.min);
-    }
-}
-
-float toNormalized(ParamId id, float physical) {
-    const ParamSpec& s = paramSpec(id);
-    const float v = clampPhysical(id, physical);
-    switch (s.mapping) {
-        case Mapping::Log: return std::log(v / s.min) / std::log(s.max / s.min);
-        case Mapping::Choice: {
-            const int count = choiceCount(s);
-            return (v - s.min + 0.5f) / static_cast<float>(count);
-        }
-        case Mapping::Int:
-        case Mapping::Linear:
-        default: return s.max > s.min ? (v - s.min) / (s.max - s.min) : 0.0f;
-    }
-}
+int paramIndexForId(const char* id) { return params::indexForId(kSpecs, kParamCount, id); }
+float clampPhysical(ParamId id, float physical) { return params::clamp(paramSpec(id), physical); }
+float toPhysical(ParamId id, float n) { return params::toPhysical(paramSpec(id), n); }
+float toNormalized(ParamId id, float physical) { return params::toNormalized(paramSpec(id), physical); }
 
 const char* paramsJson() {
-    static std::string json = [] {
-        static const char* kMappingNames[] = {"linear", "log", "int", "choice"};
-        std::string out = "[";
-        char num[64];
-        for (int i = 0; i < kParamCount; ++i) {
-            const ParamSpec& s = kSpecs[i];
-            if (i) out += ',';
-            out += "{\"index\":" + std::to_string(i) + ",\"id\":";
-            appendEscaped(out, s.id);
-            out += ",\"name\":";
-            appendEscaped(out, s.name);
-            out += ",\"unit\":";
-            appendEscaped(out, s.unit);
-            out += ",\"group\":";
-            appendEscaped(out, s.group);
-            out += ",\"mapping\":\"";
-            out += kMappingNames[static_cast<int>(s.mapping)];
-            std::snprintf(num, sizeof num, "\",\"min\":%g,\"max\":%g,\"default\":%g,\"smoothing_ms\":%g",
-                          s.min, s.max, s.def, s.smoothing_ms);
-            out += num;
-            out += ",\"choices\":[";
-            if (s.choices) {
-                std::string label;
-                bool first = true;
-                for (const char* c = s.choices;; ++c) {
-                    if (*c == '|' || *c == '\0') {
-                        if (!first) out += ',';
-                        appendEscaped(out, label.c_str());
-                        first = false;
-                        label.clear();
-                        if (*c == '\0') break;
-                    } else {
-                        label += *c;
-                    }
-                }
-            }
-            out += "]}";
-        }
-        out += "]";
-        return out;
-    }();
+    static const std::string json = params::toJson(kSpecs, kParamCount);
     return json.c_str();
 }
 

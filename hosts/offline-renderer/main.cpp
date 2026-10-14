@@ -18,6 +18,7 @@
 
 #include "adam/analysis/analysis.hpp"
 #include "c_api.h"
+#include "drum_kit.hpp"
 #include "params.hpp"
 
 namespace {
@@ -59,7 +60,7 @@ void writeWav(const std::string& path, const std::vector<float>& inter, int sr) 
 
 [[noreturn]] void usage() {
     std::fprintf(stderr,
-                 "usage: adam-render --pattern P [--preset F] [--set id=value ...]\n"
+                 "usage: adam-render --pattern P [--instrument synth|drums] [--preset F] [--set id=value ...]\n"
                  "       [--loops N | --seconds S] [--tail S] [--bpm B] [--sr 48000]\n"
                  "       [--block 128] --out out.wav [--stats out.json]\n");
     std::exit(1);
@@ -68,7 +69,7 @@ void writeWav(const std::string& path, const std::vector<float>& inter, int sr) 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string pattern, preset, out, stats;
+    std::string pattern, preset, out, stats, instrument = "synth";
     std::vector<std::string> sets;
     double loops = 1.0, seconds = -1.0, tail = 2.0, bpm = -1.0;
     int sr = 48000, block = 128;
@@ -89,13 +90,16 @@ int main(int argc, char** argv) {
         else if (a == "--block") block = std::atoi(val().c_str());
         else if (a == "--out") out = val();
         else if (a == "--stats") stats = val();
+        else if (a == "--instrument") instrument = val();
         else usage();
     }
     if (pattern.empty() || out.empty()) usage();
     if (block < 1 || block > ADAM_MAX_BLOCK || sr < 8000) usage();
     if (stats.empty()) stats = out.substr(0, out.find_last_of('.')) + ".json";
 
-    AdamSynth* s = adam_synth_create(static_cast<float>(sr));
+    if (instrument != "synth" && instrument != "drums") usage();
+    AdamSynth* s = adam_instrument_create(instrument == "drums" ? ADAM_INSTRUMENT_DRUMS : ADAM_INSTRUMENT_SYNTH,
+                                          static_cast<float>(sr));
     if (!preset.empty()) {
         // the same preset parser the browser host uses (adam_synth_apply_preset)
         if (adam_synth_apply_preset(s, readFile(preset).c_str()) <= 0)
@@ -103,7 +107,15 @@ int main(int argc, char** argv) {
     }
     for (const auto& kv : sets) {
         const auto eq = kv.find('=');
-        const int idx = eq == std::string::npos ? -1 : adam::core_synth::paramIndexForId(kv.substr(0, eq).c_str());
+        int idx = -1;
+        if (eq != std::string::npos) {
+            // look the id up in this instrument's own contract
+            const std::string id = kv.substr(0, eq);
+            const bool drums = adam_synth_instrument_type(s) == ADAM_INSTRUMENT_DRUMS;
+            const int count = drums ? adam::drum_kit::kParamCount : adam::core_synth::kParamCount;
+            const adam::ParamSpec* specs = drums ? adam::drum_kit::paramSpecs() : adam::core_synth::paramSpecs();
+            idx = adam::params::indexForId(specs, count, id.c_str());
+        }
         if (idx < 0) {
             std::fprintf(stderr, "adam-render: bad --set %s\n", kv.c_str());
             return 1;

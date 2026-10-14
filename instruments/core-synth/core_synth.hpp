@@ -21,41 +21,40 @@ namespace adam::core_synth {
 constexpr int kMaxVoices = 16;
 constexpr int kMaxUnison = 7;
 
-struct Meter {
-    float peakL = 0, peakR = 0;   // since the last read
-    float rmsL = 0, rmsR = 0;     // over the last render
-    float gainReductionDb = 0;    // limiter
-    uint64_t backstopHits = 0;    // limiter backstop engagements (should stay 0)
-    uint64_t nonFiniteResets = 0; // voices reset after a NaN/Inf
-    int activeVoices = 0;
-};
+using Meter = adam::Meter;
 
-class CoreSynth {
+class CoreSynth : public adam::Instrument {
 public:
     CoreSynth();
 
-    void prepare(float sampleRate);
-    void reset();
+    const ParamSpec* paramSpecs() const override { return core_synth::paramSpecs(); }
+    int paramCount() const override { return kParamCount; }
+    void setParam(int index, float physical) override { setParam(static_cast<ParamId>(index), physical); }
+    float param(int index) const override { return index >= 0 && index < kParamCount ? values_[index] : 0.0f; }
+
+    void prepare(float sampleRate) override;
+    void reset() override;
 
     void setParam(ParamId id, float physical);
+    using adam::Instrument::applyPreset;
     float param(ParamId id) const { return values_[id]; }
-    void resetParamsToDefaults();
+    void resetParamsToDefaults() override;
     // Jump every smoothed parameter to its target (after loading a patch, so the
     // first note does not glide in from the defaults).
-    void snapSmoothing();
+    void snapSmoothing() override;
 
-    void noteOn(int note, int velocity);
-    void noteOff(int note);
-    void sustainPedal(bool down);
-    void allNotesOff();   // release everything (with release tails)
-    void allSoundOff();   // immediate silence (transport stop / panic)
+    void noteOn(int note, int velocity) override;
+    void noteOff(int note) override;
+    void sustainPedal(bool down) override;
+    void allNotesOff() override;   // release everything (with release tails)
+    void allSoundOff() override;   // immediate silence (transport stop / panic)
 
     // Render `frames` samples into separate L/R buffers (overwrites).
-    void render(float* outL, float* outR, int frames);
+    void render(float* outL, float* outR, int frames) override;
 
-    Meter readMeter();  // returns and clears peak hold
-    int latencySamples() const { return limiter_.latencySamples(); }
-    float sampleRate() const { return sr_; }
+    Meter readMeter() override;  // returns and clears peak hold
+    int latencySamples() const override { return limiter_.latencySamples(); }
+    float sampleRate() const override { return sr_; }
 
 private:
     struct Voice {

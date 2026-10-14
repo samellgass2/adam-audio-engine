@@ -13,7 +13,17 @@ extern "C" {
 
 typedef struct AdamSynth AdamSynth;
 
-AdamSynth* adam_synth_create(float sample_rate);
+AdamSynth* adam_synth_create(float sample_rate); /* = core synth */
+
+/* Instrument types behind the same handle. */
+#define ADAM_INSTRUMENT_SYNTH 0
+#define ADAM_INSTRUMENT_DRUMS 1
+AdamSynth* adam_instrument_create(int type, float sample_rate);
+int adam_synth_instrument_type(AdamSynth* s);
+int adam_instrument_param_count(int type);
+const char* adam_instrument_params_json(int type);
+float adam_instrument_param_to_physical(int type, int index, float normalized);
+float adam_instrument_param_to_normalized(int type, int index, float physical);
 void adam_synth_destroy(AdamSynth* s);
 void adam_synth_reset(AdamSynth* s);
 

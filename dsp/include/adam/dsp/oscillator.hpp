@@ -78,7 +78,7 @@ private:
 // Deterministic white noise (xorshift32), uniform in [-1, 1).
 class Noise {
 public:
-    explicit Noise(uint32_t seed = 0x9E3779B9u) : state_(seed ? seed : 1u) {}
+    Noise(uint32_t seed = 0x9E3779B9u) : state_(seed ? seed : 1u) {}
     void seed(uint32_t s) { state_ = s ? s : 1u; }
     float next() {
         state_ ^= state_ << 13;

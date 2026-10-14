@@ -17,10 +17,12 @@ option(ADAM_BUILD_AU "Build the JUCE Audio Unit (fetches JUCE)" OFF)
 add_library(adam_core_synth STATIC
   instruments/core-synth/params.cpp
   instruments/core-synth/core_synth.cpp
-  instruments/core-synth/c_api.cpp)
+  instruments/core-synth/c_api.cpp
+  instruments/drum-kit/drum_kit.cpp)
 target_include_directories(adam_core_synth PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/dsp/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/instruments/core-synth)
+  ${CMAKE_CURRENT_SOURCE_DIR}/instruments/core-synth
+  ${CMAKE_CURRENT_SOURCE_DIR}/instruments/drum-kit)
 if(NOT MSVC)
   target_compile_options(adam_core_synth PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
@@ -41,6 +43,8 @@ if(EMSCRIPTEN)
     _adam_seq_load _adam_seq_play _adam_seq_set_bpm _adam_seq_set_loop _adam_seq_rewind
     _adam_seq_beat _adam_seq_length _adam_seq_pattern_bpm _adam_seq_playing
     _adam_text_buffer _adam_analysis_input _adam_analyze
+    _adam_instrument_create _adam_synth_instrument_type _adam_instrument_param_count
+    _adam_instrument_params_json _adam_instrument_param_to_physical _adam_instrument_param_to_normalized
     _adam_seq_seek _adam_bus_create _adam_bus_left _adam_bus_right _adam_bus_process _adam_bus_read_meter)
   list(JOIN ADAM_WASM_EXPORTS "," ADAM_WASM_EXPORTS_CSV)
   target_link_options(adam_synth_wasm PRIVATE

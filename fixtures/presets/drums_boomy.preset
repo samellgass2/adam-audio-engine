@@ -1,0 +1,16 @@
+# Boomy kit: long low 808-style kick, fat snare, long toms.
+kick_tune 42
+kick_decay 1200
+kick_punch 30
+kick_click 15
+snare_tune 165
+snare_decay 300
+snare_snappy 45
+clap_decay 420
+hat_tune 40
+hat_open_decay 800
+tom_tune 85
+tom_decay 900
+humanize 45
+velocity_timbre 70
+kit_gain -6

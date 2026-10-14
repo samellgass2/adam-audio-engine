@@ -144,6 +144,48 @@ def patterns() -> list[Pattern]:
             p.add(5 * i + 0.08 * j, 4.6, n, 100)  # rolled, overlapping the next
     p.length = 16
     out.append(p)
+
+    # --- drum beats (General MIDI drum map: 36 kick, 38 snare, 39 clap,
+    # 42 closed hat, 46 open hat, 41/45/48 toms, 37 rim) ---
+    K, S, CL, HC, HO, TL, TM, TH, RIM = 36, 38, 39, 42, 46, 41, 45, 48, 37
+
+    p = Pattern("drums_rock", "Drums: rock beat", "kick/snare backbeat, 8th hats, a fill (drum kit)", 100, 8)
+    for bar in range(2):
+        b0 = 4 * bar
+        for k in range(8):
+            p.add(b0 + 0.5 * k, 0.25, HC, 100 if k % 2 == 0 else 72)
+        for t in (0, 1.5, 2.5) if bar == 0 else (0, 2.5):
+            p.add(b0 + t, 0.25, K, 118)
+        for t in (1, 3):
+            p.add(b0 + t, 0.25, S, 112)
+    for i, (t, n) in enumerate([(7.0, TH), (7.25, TH), (7.5, TM), (7.75, TL)]):
+        p.add(t, 0.25, n, 96 + 6 * i)
+    out.append(p)
+
+    p = Pattern("drums_house", "Drums: four on the floor", "kick every beat, offbeat open hats, clap (drum kit)", 124, 8)
+    for b in range(8):
+        p.add(b, 0.25, K, 120)
+        p.add(b + 0.5, 0.25, HO, 92)
+        p.add(b + 0.25, 0.1, HC, 58)
+        p.add(b + 0.75, 0.1, HC, 64)
+        if b % 2 == 1:
+            p.add(b, 0.25, CL, 108)
+    out.append(p)
+
+    p = Pattern("drums_halftime", "Drums: half-time with ghosts", "snare on 3, ghost notes, rim, tom fill (drum kit)", 84, 8)
+    for bar in range(2):
+        b0 = 4 * bar
+        p.add(b0, 0.25, K, 124)
+        p.add(b0 + 1.75, 0.25, K, 100)
+        p.add(b0 + 2, 0.25, S, 120)
+        for t in (0.75, 1.25, 3.25, 3.75):
+            p.add(b0 + t, 0.2, S, 34)  # ghost notes
+        for k in range(8):
+            p.add(b0 + 0.5 * k, 0.2, HC, 86 if k % 2 == 0 else 54)
+        p.add(b0 + 3.5, 0.2, RIM, 90)
+    for i, (t, n) in enumerate([(7.0, TH), (7.33, TM), (7.66, TL)]):
+        p.add(t, 0.3, n, 100 + 8 * i)
+    out.append(p)
     return out
 
 

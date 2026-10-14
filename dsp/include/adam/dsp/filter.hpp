@@ -4,6 +4,7 @@
 // Two in series give 24 dB/oct; resonance lives in the last stage only.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 namespace adam::dsp {
@@ -26,6 +27,28 @@ public:
         if (!(std::fabs(ic1_) > 1e-20f) || !std::isfinite(ic1_)) ic1_ = 0.0f;
         if (!(std::fabs(ic2_) > 1e-20f) || !std::isfinite(ic2_)) ic2_ = 0.0f;
         return v2;
+    }
+
+    // All three outputs at once (for band/high-pass voices).
+    void process(float x, float g, float k, float& lp, float& bp, float& hp) {
+        const float a1 = 1.0f / (1.0f + g * (g + k));
+        const float a2 = g * a1;
+        const float a3 = g * a2;
+        const float v3 = x - ic2_;
+        const float v1 = a1 * ic1_ + a2 * v3;
+        const float v2 = ic2_ + a2 * ic1_ + a3 * v3;
+        ic1_ = 2.0f * v1 - ic1_;
+        ic2_ = 2.0f * v2 - ic2_;
+        if (!(std::fabs(ic1_) > 1e-20f) || !std::isfinite(ic1_)) ic1_ = 0.0f;
+        if (!(std::fabs(ic2_) > 1e-20f) || !std::isfinite(ic2_)) ic2_ = 0.0f;
+        lp = v2;
+        bp = v1;
+        hp = x - k * v1 - v2;
+    }
+
+    static float coef(float hz, float sampleRate) {
+        const float f = std::min(hz, 0.45f * sampleRate);
+        return std::tan(3.14159265359f * std::max(f, 10.0f) / sampleRate);
     }
 
 private:

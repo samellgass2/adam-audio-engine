@@ -1,0 +1,14 @@
+# Tight kit: punchy short kick, crisp snare, short hats.
+kick_tune 52
+kick_decay 360
+kick_punch 26
+kick_click 40
+snare_tune 195
+snare_decay 170
+snare_snappy 65
+hat_closed_decay 45
+hat_open_decay 380
+tom_decay 320
+humanize 35
+velocity_timbre 60
+kit_gain -4

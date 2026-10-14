@@ -7,27 +7,12 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "adam/instrument.hpp"
+
 namespace adam::core_synth {
 
-enum class Mapping : uint8_t {
-    Linear,  // physical = min + n * (max - min)
-    Log,     // physical = min * (max / min)^n           (min > 0)
-    Int,     // linear, rounded to whole steps
-    Choice,  // index into `choices`, n spread evenly
-};
-
-struct ParamSpec {
-    const char* id;       // stable machine id, e.g. "filter_cutoff"
-    const char* name;     // display name
-    const char* unit;     // "Hz", "ms", "cents", "dB", "%", "" ...
-    const char* group;    // UI grouping
-    Mapping mapping;
-    float min;
-    float max;
-    float def;            // physical default
-    float smoothing_ms;   // 0 = applied at once (choices, voice count)
-    const char* choices;  // "|"-separated labels for Mapping::Choice
-};
+using adam::Mapping;
+using adam::ParamSpec;
 
 enum ParamId : uint16_t {
     kOsc1Wave = 0,
@@ -70,6 +55,7 @@ enum ParamId : uint16_t {
 };
 
 const ParamSpec& paramSpec(ParamId id);
+const ParamSpec* paramSpecs();
 size_t paramCount();
 int paramIndexForId(const char* id);  // -1 when unknown
 

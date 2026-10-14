@@ -1,0 +1,16 @@
+# Crisp kit: high clicky kick, bright snappy snare, bright hats, little humanize.
+kick_tune 60
+kick_decay 220
+kick_punch 34
+kick_click 75
+snare_tune 230
+snare_decay 120
+snare_snappy 85
+hat_tune 70
+hat_closed_decay 30
+hat_open_decay 260
+tom_tune 140
+tom_decay 240
+humanize 15
+velocity_timbre 50
+kit_gain -4

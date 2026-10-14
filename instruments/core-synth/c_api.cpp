@@ -1,18 +1,20 @@
 #include "c_api.h"
 
 #include <cmath>
+#include <memory>
 #include <new>
 
 #include "adam/seq/sequencer.hpp"
 #include "core_synth.hpp"
-#include "preset.hpp"
+#include "drum_kit.hpp"
 #include "adam/analysis/analysis.hpp"
 
 using adam::core_synth::CoreSynth;
 using adam::core_synth::ParamId;
 
 struct AdamSynth {
-    CoreSynth synth;
+    std::unique_ptr<adam::Instrument> inst;
+    int type = ADAM_INSTRUMENT_SYNTH;
     float left[ADAM_MAX_BLOCK];
     float right[ADAM_MAX_BLOCK];
     float meter[8];
@@ -22,31 +24,73 @@ struct AdamSynth {
 
 namespace {
 bool validIndex(int i) { return i >= 0 && i < static_cast<int>(adam::core_synth::kParamCount); }
+
+const adam::ParamSpec* specsFor(int type, int* count) {
+    if (type == ADAM_INSTRUMENT_DRUMS) {
+        *count = adam::drum_kit::kParamCount;
+        return adam::drum_kit::paramSpecs();
+    }
+    *count = adam::core_synth::kParamCount;
+    return adam::core_synth::paramSpecs();
+}
 }  // namespace
 
 extern "C" {
 
-AdamSynth* adam_synth_create(float sample_rate) {
+AdamSynth* adam_instrument_create(int type, float sample_rate) {
     auto* s = new (std::nothrow) AdamSynth();
     if (!s) return nullptr;
-    s->synth.prepare(sample_rate);
+    s->type = type == ADAM_INSTRUMENT_DRUMS ? ADAM_INSTRUMENT_DRUMS : ADAM_INSTRUMENT_SYNTH;
+    if (s->type == ADAM_INSTRUMENT_DRUMS) s->inst.reset(new (std::nothrow) adam::drum_kit::DrumKit());
+    else s->inst.reset(new (std::nothrow) CoreSynth());
+    if (!s->inst) {
+        delete s;
+        return nullptr;
+    }
+    s->inst->prepare(sample_rate);
     return s;
 }
 
+AdamSynth* adam_synth_create(float sample_rate) { return adam_instrument_create(ADAM_INSTRUMENT_SYNTH, sample_rate); }
+
+int adam_synth_instrument_type(AdamSynth* s) { return s ? s->type : -1; }
+
+int adam_instrument_param_count(int type) {
+    int n = 0;
+    specsFor(type, &n);
+    return n;
+}
+
+const char* adam_instrument_params_json(int type) {
+    return type == ADAM_INSTRUMENT_DRUMS ? adam::drum_kit::paramsJson() : adam::core_synth::paramsJson();
+}
+
+float adam_instrument_param_to_physical(int type, int index, float n) {
+    int count = 0;
+    const adam::ParamSpec* specs = specsFor(type, &count);
+    return index >= 0 && index < count ? adam::params::toPhysical(specs[index], n) : 0.0f;
+}
+
+float adam_instrument_param_to_normalized(int type, int index, float v) {
+    int count = 0;
+    const adam::ParamSpec* specs = specsFor(type, &count);
+    return index >= 0 && index < count ? adam::params::toNormalized(specs[index], v) : 0.0f;
+}
+
 void adam_synth_destroy(AdamSynth* s) { delete s; }
-void adam_synth_reset(AdamSynth* s) { if (s) s->synth.reset(); }
-void adam_synth_note_on(AdamSynth* s, int note, int velocity) { if (s) s->synth.noteOn(note, velocity); }
-void adam_synth_note_off(AdamSynth* s, int note) { if (s) s->synth.noteOff(note); }
-void adam_synth_sustain(AdamSynth* s, int down) { if (s) s->synth.sustainPedal(down != 0); }
-void adam_synth_all_notes_off(AdamSynth* s) { if (s) s->synth.allNotesOff(); }
-void adam_synth_all_sound_off(AdamSynth* s) { if (s) s->synth.allSoundOff(); }
+void adam_synth_reset(AdamSynth* s) { if (s) s->inst->reset(); }
+void adam_synth_note_on(AdamSynth* s, int note, int velocity) { if (s) s->inst->noteOn(note, velocity); }
+void adam_synth_note_off(AdamSynth* s, int note) { if (s) s->inst->noteOff(note); }
+void adam_synth_sustain(AdamSynth* s, int down) { if (s) s->inst->sustainPedal(down != 0); }
+void adam_synth_all_notes_off(AdamSynth* s) { if (s) s->inst->allNotesOff(); }
+void adam_synth_all_sound_off(AdamSynth* s) { if (s) s->inst->allSoundOff(); }
 
 void adam_synth_set_param(AdamSynth* s, int index, float physical) {
-    if (s && validIndex(index)) s->synth.setParam(static_cast<ParamId>(index), physical);
+    if (s && index >= 0 && index < s->inst->paramCount()) s->inst->setParam(index, physical);
 }
 
 float adam_synth_get_param(AdamSynth* s, int index) {
-    return (s && validIndex(index)) ? s->synth.param(static_cast<ParamId>(index)) : 0.0f;
+    return (s && index >= 0 && index < s->inst->paramCount()) ? s->inst->param(index) : 0.0f;
 }
 
 int adam_param_count(void) { return static_cast<int>(adam::core_synth::kParamCount); }
@@ -62,10 +106,10 @@ float adam_param_to_normalized(int index, float physical) {
 const char* adam_params_json(void) { return adam::core_synth::paramsJson(); }
 
 int adam_synth_apply_preset(AdamSynth* s, const char* text) {
-    return s ? adam::core_synth::applyPreset(s->synth, text) : 0;
+    return s ? s->inst->applyPreset(text) : 0;
 }
 
-void adam_synth_snap_params(AdamSynth* s) { if (s) s->synth.snapSmoothing(); }
+void adam_synth_snap_params(AdamSynth* s) { if (s) s->inst->snapSmoothing(); }
 
 void adam_synth_render(AdamSynth* s, int frames) {
     if (!s) return;
@@ -73,15 +117,15 @@ void adam_synth_render(AdamSynth* s, int frames) {
     if (frames <= 0) return;
     int rendered = 0;
     // render up to each sequencer event, apply it, continue: sample-accurate
-    s->seq.advance(frames, s->synth.sampleRate(), [&](int offset, int note, int velocity) {
+    s->seq.advance(frames, s->inst->sampleRate(), [&](int offset, int note, int velocity) {
         if (offset > rendered) {
-            s->synth.render(s->left + rendered, s->right + rendered, offset - rendered);
+            s->inst->render(s->left + rendered, s->right + rendered, offset - rendered);
             rendered = offset;
         }
-        if (velocity > 0) s->synth.noteOn(note, velocity);
-        else s->synth.noteOff(note);
+        if (velocity > 0) s->inst->noteOn(note, velocity);
+        else s->inst->noteOff(note);
     });
-    if (rendered < frames) s->synth.render(s->left + rendered, s->right + rendered, frames - rendered);
+    if (rendered < frames) s->inst->render(s->left + rendered, s->right + rendered, frames - rendered);
 }
 
 int adam_seq_load(AdamSynth* s, const char* text) {
@@ -89,7 +133,7 @@ int adam_seq_load(AdamSynth* s, const char* text) {
     const bool wasPlaying = s->seq.playing();
     const int notes = s->seq.load(text);
     if (notes > 0) {
-        s->synth.allNotesOff();
+        s->inst->allNotesOff();
         s->seq.setPlaying(wasPlaying);
     }
     return notes;
@@ -98,7 +142,7 @@ int adam_seq_load(AdamSynth* s, const char* text) {
 void adam_seq_play(AdamSynth* s, int playing) {
     if (!s) return;
     s->seq.setPlaying(playing != 0);
-    if (!playing) s->synth.allNotesOff();
+    if (!playing) s->inst->allNotesOff();
 }
 
 void adam_seq_set_bpm(AdamSynth* s, double bpm) { if (s) s->seq.setBpm(bpm); }
@@ -106,7 +150,7 @@ void adam_seq_set_loop(AdamSynth* s, int loop) { if (s) s->seq.setLoop(loop != 0
 void adam_seq_rewind(AdamSynth* s) {
     if (!s) return;
     s->seq.rewind();
-    s->synth.allNotesOff();
+    s->inst->allNotesOff();
 }
 double adam_seq_beat(AdamSynth* s) { return s ? s->seq.beat() : 0.0; }
 double adam_seq_length(AdamSynth* s) { return s ? s->seq.lengthBeats() : 0.0; }
@@ -202,7 +246,7 @@ float* adam_analyze(int frames, float sample_rate) {
 
 float* adam_synth_read_meter(AdamSynth* s) {
     if (!s) return nullptr;
-    const auto m = s->synth.readMeter();
+    const auto m = s->inst->readMeter();
     s->meter[0] = m.peakL;
     s->meter[1] = m.peakR;
     s->meter[2] = m.rmsL;
