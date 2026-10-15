@@ -1605,8 +1605,10 @@ async function boot() {
     $("bpmval").textContent = `${state.bpm} bpm`;
     post({ type: "bpm", bpm: state.bpm });
   });
-  // inside the Staging frame the browser blocks the microphone: offer the full page
-  if (window.top !== window) $("fullPage").hidden = false;
+  // framed without microphone permission (e.g. the Staging tab): offer the full page
+  const policy = document.permissionsPolicy || document.featurePolicy;
+  const micAllowed = policy?.allowsFeature ? policy.allowsFeature("microphone") : true;
+  if (window.top !== window && !micAllowed) $("fullPage").hidden = false;
 }
 
 // Standard MIDI File (format 0) from pattern text — for Logic.
