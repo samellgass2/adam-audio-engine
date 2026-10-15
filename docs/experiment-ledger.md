@@ -4,6 +4,20 @@ One entry per meaningful DSP change: what changed, what we expected to hear,
 what we measured, where the renders are, the human verdict, and the outcome.
 Newest first. "Awaiting listen" means no human has judged it yet.
 
+## 2026-10-14 — The workshop as a demo tool (sessions, takes, Export for Logic, staff)
+
+- **Sam's verdict on the tiny DAW:** "thoroughly impressed… like a light
+  DAW"; loops, piano, synth "still great"; drum pads "good enough"; asked to
+  stop the graphs jumping, add mic recording, saving, a path to Logic, a
+  grand staff, tap tempo.
+- **Built + measured:** collapsible panels (page height constant while
+  playing); sessions round-trip every layer's sound/notes/mute/tempo;
+  takes recorded on the loop clock from the next bar 1 (4.8 s = 4 bars at
+  200 bpm); Export for Logic in ~1 s — mix = sum of solo stems (-150 dB),
+  backing stem = adam-render (-128 dB), stems trimmed onto the grid; staff
+  spelled in the key (G major: F line -> F#5 under the signature).
+- **Human verdict:** awaiting Sam (mic on a phone; Logic import).
+
 ## 2026-10-14 — Drum kit with liveness; Adam Drums AU; workshop as a tiny DAW
 
 - **Change:** `adam::Instrument` interface (synth now implements it; output

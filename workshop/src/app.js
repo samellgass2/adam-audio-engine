@@ -8,6 +8,7 @@
 // same WASM per instrument kind answers parameter mapping / preset / tempo
 // questions, so no synth logic is re-implemented in JavaScript.
 import { PianoRoll, DRUM_ROWS, noteName } from "./pianoroll.js";
+import { StaffView } from "./staff.js";
 import { sessions as sessionStore, audio as audioStore } from "./store.js";
 import { multitrackMidi, wavStereo, zip, renderOffline } from "./export.js";
 
@@ -53,11 +54,14 @@ const state = {
   layers: [{ name: "Backing", kind: "synth", presetText: "", presetName: "", muted: false, recording: false, notes: [] }],
   selected: 0,
   roll: null,
+  staff: null,
+  view: "roll", // or "staff"
   sessionName: "Untitled",
   dirty: false,
 };
 
 const layer = () => state.layers[state.selected];
+const editor = () => (state.view === "staff" && state.staff ? state.staff : state.roll);
 const kind = () => layer().kind;
 const isAudio = () => kind() === "audio";
 const mirror = () => state.mirrors[kind()];
@@ -942,9 +946,31 @@ function audioPanelEvents() {
 }
 
 // ------------------------------------------------------------ piano roll
+function setView(view) {
+  const from = editor();
+  state.view = view === "staff" && kind() !== "drums" ? "staff" : "roll";
+  const to = editor();
+  // carry the writing state across
+  to.grid = from.grid;
+  to.cursor = from.cursor;
+  to.stepMode = from.stepMode;
+  for (const [id, v] of [["viewRoll", "roll"], ["viewStaff", "staff"]]) {
+    $(id).classList.toggle("on", state.view === v);
+    $(id).setAttribute("aria-selected", String(state.view === v));
+  }
+  refreshRoll();
+  updateStepUi();
+}
+
 function refreshRoll() {
   const audio = isAudio();
-  $("roll").hidden = audio;
+  const staff = state.view === "staff" && !audio && kind() !== "drums";
+  if (state.view === "staff" && !staff && kind() === "drums") state.view = "roll";
+  $("viewRow").hidden = audio;
+  $("viewStaff").disabled = kind() === "drums";
+  $("palette").hidden = $("accidentals").hidden = $("staffHint").hidden = !staff;
+  $("staffWrap").hidden = !staff;
+  $("roll").hidden = audio || staff;
   $("rollTools").hidden = audio;
   $("audioPanel").hidden = !audio;
   $("loadPattern").disabled = audio;
@@ -958,7 +984,7 @@ function refreshRoll() {
     drawTake(l);
     return;
   }
-  state.roll.setLayer({ kind: kind(), notes: layer().notes, lengthBeats: state.lengthBeats });
+  editor().setLayer({ kind: kind(), notes: layer().notes, lengthBeats: state.lengthBeats });
   applyScaleToRoll();
 }
 
@@ -970,7 +996,7 @@ function onRollChange(notes) {
 }
 
 function stepEntryActive() {
-  return state.roll.stepMode && !state.playing;
+  return editor().stepMode && !state.playing;
 }
 
 // ------------------------------------------------------- keyboard & pads
@@ -981,7 +1007,7 @@ function noteOn(note, id, velocity = 100) {
   held.set(id, note);
   post({ type: "noteOn", note, velocity, layer: state.selected });
   document.querySelector(`[data-note="${note}"]`)?.classList.add("down");
-  if (stepEntryActive()) state.roll.addAtCursor(note, velocity); // spell a chord note by note
+  if (stepEntryActive()) editor().addAtCursor(note, velocity); // spell a chord note by note
 }
 
 function noteOff(id) {
@@ -1003,6 +1029,7 @@ function scaleSteps() {
 function applyScaleToRoll() {
   const steps = scaleSteps();
   state.roll.setScale(state.keyRoot, steps ? (pc) => steps.includes((pc - state.keyRoot + 12) % 12) : null);
+  state.staff.setKey(state.keyRoot, state.keyScale); // spelling + key signature
 }
 
 // Chromatic: a piano. A scale: only the scale's notes, as big equal keys.
@@ -1202,7 +1229,7 @@ function onWorkletMessage(m) {
   $("safety").className = unsafe ? "bad" : "ok";
   $("safety").textContent = unsafe ? `safety stage engaged (backstop ${m.backstop}, NaN resets ${m.nanResets})` : "output safe";
   $("beatbar").style.width = `${((m.beat % state.lengthBeats) / state.lengthBeats) * 100}%`;
-  state.roll.playhead = state.playing ? m.beat : -1;
+  editor().playhead = state.playing ? m.beat : -1;
   if (state.playing && !m.playing) setPlaying(false); // a non-looping pattern ended
   if (m.inputPeak !== undefined) $("inLevel").style.width = `${Math.min(100, Math.sqrt(m.inputPeak) * 100)}%`;
   if (m.recording) m.recording.forEach((r, i) => {
@@ -1219,17 +1246,17 @@ function setPlaying(on) {
   post({ type: "play", on });
   if (!on) {
     post({ type: "rewind" });
-    state.roll.playhead = -1;
+    editor().playhead = -1;
   }
   updateStepUi();
 }
 
 function updateStepUi() {
-  const on = state.roll.stepMode;
+  const on = editor().stepMode;
   $("stepMode").setAttribute("aria-pressed", String(on));
   $("stepBack").disabled = $("stepNext").disabled = !on;
   $("stepMode").textContent = on ? (state.playing ? "✎ Step entry (stop to write)" : "✎ Step entry on") : "✎ Step entry";
-  state.roll.draw();
+  editor().draw();
 }
 
 function setVolume() {
@@ -1320,7 +1347,7 @@ function draw(t) {
     drawScope(a);
   }
   if (state.playing && t - lastRollDraw > 33) {
-    state.roll.draw(); // move the playhead
+    editor().draw(); // move the playhead
     lastRollDraw = t;
   }
   requestAnimationFrame(draw);
@@ -1396,7 +1423,7 @@ async function boot() {
   try {
     await loadEngine();
     await loadIndexes();
-    state.roll = new PianoRoll($("roll"), {
+    const editorOpts = {
       onChange: onRollChange,
       onSelect: ({ audition }) => {
         // tapping a note or a row label plays it, so editing is by ear
@@ -1404,7 +1431,9 @@ async function boot() {
         post({ type: "noteOn", note: audition, velocity: 90, layer: state.selected });
         setTimeout(() => post({ type: "noteOff", note: audition, layer: state.selected }), 220);
       },
-    });
+    };
+    state.roll = new PianoRoll($("roll"), editorOpts);
+    state.staff = new StaffView($("staff"), editorOpts);
     for (let i = 0; i < 12; i++) $("keyRoot").add(new Option(NOTE_NAMES[i], i));
     for (const [k, [label]] of Object.entries(SCALES)) $("keyScale").add(new Option(label, k));
     buildParams();
@@ -1450,15 +1479,15 @@ async function boot() {
   $("addSynth").addEventListener("click", () => addLayer("synth"));
   $("addDrums").addEventListener("click", () => addLayer("drums"));
   $("grid").addEventListener("change", () => {
-    state.roll.grid = Number($("grid").value);
-    state.roll.cursor = Math.round(state.roll.cursor / state.roll.grid) * state.roll.grid;
-    state.roll.draw();
+    editor().grid = Number($("grid").value);
+    editor().cursor = Math.round(editor().cursor / editor().grid) * editor().grid;
+    editor().draw();
   });
   $("loadPattern").addEventListener("change", async () => {
     const file = $("loadPattern").value;
     if (!file) return;
     const p = parsePattern(await patternFile(file));
-    state.roll.snapshot();
+    editor().snapshot();
     // tile a shorter pattern across the loop; drop what runs past it
     const notes = [];
     const len = p.length || state.lengthBeats;
@@ -1470,16 +1499,41 @@ async function boot() {
     renderLayers();
     $("loadPattern").value = "";
   });
+  $("viewRoll").addEventListener("click", () => setView("roll"));
+  $("viewStaff").addEventListener("click", () => setView("staff"));
+  const durButtons = [...$("palette").querySelectorAll("[data-dur]")];
+  let dotted = false;
+  const setPalette = () => {
+    const base = Number(durButtons.find((b) => b.classList.contains("on")).dataset.dur);
+    state.staff.palette = dotted ? base * 1.5 : base;
+    $("dot").classList.toggle("on", dotted);
+    state.staff.draw();
+  };
+  durButtons.forEach((b) => b.addEventListener("click", () => {
+    durButtons.forEach((x) => x.classList.toggle("on", x === b));
+    if (Number(b.dataset.dur) >= 4) dotted = false; // no dotted whole in 4/4
+    setPalette();
+  }));
+  $("dot").addEventListener("click", () => {
+    dotted = !dotted;
+    setPalette();
+  });
+  for (const b of $("accidentals").querySelectorAll("[data-acc]"))
+    b.addEventListener("click", () => {
+      const on = state.staff.modifier !== b.dataset.acc;
+      state.staff.modifier = on ? b.dataset.acc : null;
+      $("accidentals").querySelectorAll("[data-acc]").forEach((x) => x.classList.toggle("on", on && x === b));
+    });
   $("stepMode").addEventListener("click", () => {
-    state.roll.stepMode = !state.roll.stepMode;
+    editor().stepMode = !editor().stepMode;
     updateStepUi();
   });
-  $("stepBack").addEventListener("click", () => state.roll.moveCursor(-1));
-  $("stepNext").addEventListener("click", () => state.roll.moveCursor(1));
-  $("undo").addEventListener("click", () => state.roll.undo());
-  $("delNote").addEventListener("click", () => state.roll.deleteSelected());
+  $("stepBack").addEventListener("click", () => editor().moveCursor(-1));
+  $("stepNext").addEventListener("click", () => editor().moveCursor(1));
+  $("undo").addEventListener("click", () => editor().undo());
+  $("delNote").addEventListener("click", () => editor().deleteSelected());
   $("clearNotes").addEventListener("click", () => {
-    if (layer().notes.length && confirm(`Clear all notes on ${layer().name}?`)) state.roll.clear();
+    if (layer().notes.length && confirm(`Clear all notes on ${layer().name}?`)) editor().clear();
   });
   $("expMid").addEventListener("click", () =>
     download(`${layer().name.replace(/\s+/g, "_").toLowerCase()}.mid`,
@@ -1520,7 +1574,7 @@ async function boot() {
     setTimeout(() => ($("copy").textContent = "Copy"), 1600);
   });
   updateStepUi();
-  window.addEventListener("resize", () => state.roll.draw());
+  window.addEventListener("resize", () => editor().draw());
   // collapsible panels remember how you left them
   for (const id of ["monitorPanel", "agentPanel"]) {
     try {

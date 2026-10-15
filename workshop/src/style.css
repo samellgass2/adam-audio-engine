@@ -158,3 +158,9 @@ details.panel[open] > summary { margin-bottom: 10px; }
 .audio-panel { display: grid; gap: 8px; }
 .inmeter { flex: 1; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
 #inLevel { height: 100%; width: 0; background: var(--good); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; min-height: 36px; padding: 4px 10px; font-size: 15px; }
+.seg button.on { background: var(--accent); color: #fff; }
+.staffwrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
+.staff { background: #fffdf8; }
+@media (prefers-color-scheme: dark) { .staff { background: #f4f1ea; } }

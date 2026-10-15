@@ -104,7 +104,25 @@
           <label class="field inline"><span>Load</span><select id="loadPattern"></select></label>
         </div>
       </div>
+      <div class="row" id="viewRow">
+        <div class="seg" role="tablist" aria-label="View">
+          <button id="viewRoll" class="on" role="tab" aria-selected="true">Piano roll</button>
+          <button id="viewStaff" role="tab" aria-selected="false">Staff</button>
+        </div>
+        <div class="seg" id="palette" hidden aria-label="Note length">
+          <button data-dur="4" title="whole">𝅝</button>
+          <button data-dur="2" title="half">𝅗𝅥</button>
+          <button data-dur="1" class="on" title="quarter">♩</button>
+          <button data-dur="0.5" title="eighth">♪</button>
+          <button data-dur="0.25" title="sixteenth">𝅘𝅥𝅯</button>
+          <button id="dot" title="dotted">·</button>
+        </div>
+        <div class="seg" id="accidentals" hidden aria-label="Accidental for the next note">
+          <button data-acc="♯">♯</button><button data-acc="♭">♭</button><button data-acc="♮">♮</button>
+        </div>
+      </div>
       <canvas id="roll" class="roll" aria-label="Piano roll"></canvas>
+      <div class="staffwrap" id="staffWrap" hidden><canvas id="staff" class="roll staff" aria-label="Grand staff"></canvas></div>
       <div id="audioPanel" class="audio-panel" hidden>
         <canvas id="wave" class="wave" aria-label="Recorded take"></canvas>
         <div class="row">
@@ -131,6 +149,9 @@
         <button id="expMid">.mid</button>
         <button id="expPat">.pat</button>
       </div>
+      <p class="hint" id="staffHint" hidden><b>Staff:</b> pick a length (and ♯/♭ for one note), tap a line or space to
+        drop a note · tap a note to give it that length (tap again to cycle) · drag up/down to change the note, sideways to
+        move it · double-tap to delete. Spelled in the key you pick under Play it.</p>
       <p class="hint">Tap a cell to add a note · drag to move · drag its right edge to resize · double-tap to delete.
         <b>Step entry</b> (while stopped): play notes one by one — they stack at the cursor as one chord; <b>Next ▶</b>
         moves on. Tap the bar numbers to place the cursor.</p>

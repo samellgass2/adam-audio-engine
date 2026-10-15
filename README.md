@@ -28,9 +28,12 @@ Audio Unit. Spec: adamOS `docs/specs/ADAM_AUDIO_ENGINE_2026_10_13.md`.
   808-style hats (closed chokes open), three toms, rim; velocity changes
   timbre, `humanize` varies each hit (deterministically); GM drum map.
   Also an AU: **Adam Drums** (`aumu AdDr Adam`).
-- **Tiny DAW** (workshop): synth or drum layers, a piano roll per layer
-  (add / move / resize / delete, live record over it, step-entry chords while
-  stopped), drum pads, a key/scale-locked keyboard, empty loops to start from.
+- **Tiny DAW** (workshop): synth, drum and audio (mic) layers; a piano roll
+  and a grand-staff view per layer (edit in either; live record over it;
+  step-entry chords while stopped); drum pads; a key/scale-locked keyboard;
+  tap tempo; empty loops; saved sessions (IndexedDB; export/import
+  `.adamsession`); **Export for Logic** — a zip with multitrack MIDI, stems
+  rendered by the engine itself (on the grid), raw takes, sounds, README.
 - **Layered looper** (workshop): the backing pattern is the loop's clock; up
   to 4 more layers, each its own synth and patch; Rec captures what you play
   (overdubs), the engine's sequencer replays it in phase (`seek`), layers sum
