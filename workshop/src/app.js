@@ -9,6 +9,7 @@
 // questions, so no synth logic is re-implemented in JavaScript.
 import { PianoRoll, DRUM_ROWS, noteName } from "./pianoroll.js";
 import { sessions as sessionStore, audio as audioStore } from "./store.js";
+import { multitrackMidi, wavStereo, zip, renderOffline } from "./export.js";
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -579,6 +580,7 @@ async function newSession() {
 
 function sessionEvents() {
   $("sessSave").addEventListener("click", () => saveSession(false));
+  $("exportLogic").addEventListener("click", exportForLogic);
   $("sessSaveAs").addEventListener("click", () => saveSession(true));
   $("sessNew").addEventListener("click", newSession);
   $("sessOpen").addEventListener("change", async () => {
@@ -626,6 +628,121 @@ function sessionEvents() {
     }
     $("sessImport").value = "";
   });
+}
+
+// --------------------------------------------------------- export for Logic
+// The engine setup for this session, as worklet messages: what the live
+// engine received, replayed into an offline one. solo = only that layer
+// audible; -1 = the mix (the session's own mutes).
+function engineSetup(solo, sr, playFrames = 0) {
+  const msgs = [{ type: "bpm", bpm: state.bpm }, { type: "loop", on: true }];
+  const [l0, ...rest] = state.layers;
+  msgs.push({ type: "preset", layer: 0, bytes: enc.encode(l0.presetText || "") });
+  msgs.push({ type: "pattern", notes: l0.notes, bytes: enc.encode(patternText(l0.notes, state.bpm, state.lengthBeats)) });
+  rest.forEach((l, k) => {
+    const i = k + 1;
+    if (l.kind === "audio") {
+      msgs.push({ type: "addAudioLayer" });
+      if (l.take) msgs.push({ type: "setAudio", layer: i, samples: resample(l.take, state.ctx.sampleRate, sr), passes: l.passes || 1 });
+      msgs.push({ type: "audioParams", layer: i, gain: l.gain ?? 1, offset: ((l.offsetMs ?? 0) / 1000) * sr });
+    } else {
+      msgs.push({ type: "addLayer", kind: KIND[l.kind], bytes: enc.encode(l.presetText || "") });
+      msgs.push({ type: "setNotes", layer: i, notes: l.notes,
+        bytes: enc.encode(patternText(l.notes, state.bpm, state.lengthBeats)) });
+    }
+  });
+  state.layers.forEach((l, i) => msgs.push({ type: "mute", layer: i, on: solo >= 0 ? i !== solo : !!l.muted }));
+  msgs.push({ type: "play", on: true });
+  if (playFrames) msgs.push({ type: "stopAfter", frames: playFrames }); // then only the release tails
+  return msgs;
+}
+
+// Engine latency: every limiter (each instrument's, and the mix bus's) looks
+// 1.5 ms ahead (C++ Limiter::setup truncates to whole samples). Stems are
+// trimmed by it so they sit on Logic's grid exactly where song.mid does.
+const limiterLatency = (sr) => Math.floor(0.0015 * sr);
+function trimmed({ left, right }, n) {
+  const l = new Float32Array(left.length), r = new Float32Array(right.length);
+  l.set(left.subarray(n));
+  r.set(right.subarray(n));
+  return { left: l, right: r };
+}
+
+const safeName = (s) => s.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toLowerCase() || "layer";
+
+async function exportForLogic() {
+  if (!state.ctx) return alert("Start audio first.");
+  const loops = Number($("exportLoops").value);
+  const sr = state.ctx.sampleRate;
+  const playSeconds = (loops * state.lengthBeats * 60) / state.bpm;
+  const seconds = playSeconds + 2.5; // release tails
+  const title = state.sessionName === "Untitled" ? "adam_sketch" : safeName(state.sessionName);
+  const btn = $("exportLogic");
+  btn.disabled = true;
+  const files = [];
+  try {
+    const status = (t) => (btn.textContent = t);
+    files.push({ name: `${title}/song.mid`, data: multitrackMidi({ bpm: state.bpm, lengthBeats: state.lengthBeats, loops,
+      layers: state.layers, name: state.sessionName }) });
+    const audible = state.layers.map((l, i) => (l.notes.length || l.take ? i : -1)).filter((i) => i >= 0);
+    status("Rendering mix…");
+    const lat = limiterLatency(sr);
+    const mix = trimmed(await renderOffline({ wasmBytes: state.wasmBytes, setup: engineSetup(-1, sr, Math.round(playSeconds * sr)),
+      seconds, sampleRate: sr }), 2 * lat);
+    files.push({ name: `${title}/stems/00_mix.wav`, data: wavStereo(mix.left, mix.right, sr) });
+    for (const i of audible) {
+      const l = state.layers[i];
+      status(`Rendering ${l.name}…`);
+      const r = trimmed(await renderOffline({ wasmBytes: state.wasmBytes,
+        setup: engineSetup(i, sr, Math.round(playSeconds * sr)), seconds, sampleRate: sr }), (l.kind === "audio" ? 1 : 2) * lat);
+      files.push({ name: `${title}/stems/${String(i + 1).padStart(2, "0")}_${safeName(l.name)}.wav`,
+        data: wavStereo(r.left, r.right, sr) });
+      if (l.take) files.push({ name: `${title}/takes/${safeName(l.name)}.wav`, data: wavBytes(l.take, sr) });
+      if (l.kind !== "audio")
+        files.push({ name: `${title}/sounds/${String(i + 1).padStart(2, "0")}_${safeName(l.name)}.preset`,
+          data: `# ${l.name} — ${l.kind === "drums" ? "Adam Drums" : "Adam Core Synth"}\n${l.presetText}` });
+    }
+    status("Packing…");
+    const sess = sessionSnapshot();
+    for (const l of sess.layers) {
+      const live = state.layers.find((x) => x.audioId && x.audioId === l.audioId);
+      if (live?.take) l.audioBase64 = floatsToBase64(live.take);
+    }
+    files.push({ name: `${title}/session.adamsession`, data: JSON.stringify(sess) });
+    files.push({ name: `${title}/README.txt`, data: logicReadme(loops) });
+    download(`${title}_for_logic.zip`, zip(files), "application/zip");
+    $("sessionState").textContent = `exported ${files.length} files (${loops} loops, ${seconds.toFixed(1)} s stems)`;
+  } catch (err) {
+    alert(`Export failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Export for Logic";
+  }
+}
+
+function logicReadme(loops) {
+  const lines = state.layers.map((l, i) =>
+    `  ${String(i + 1).padStart(2, "0")} ${l.name} — ${l.kind === "audio" ? "audio take" : l.kind === "drums" ? "Adam Drums (MIDI ch 10)" : "Adam Core Synth"}${l.muted ? " (muted in the mix)" : ""}`);
+  return [
+    `${state.sessionName} — exported from the Adam workshop ${new Date().toLocaleString()}`,
+    "",
+    `Tempo ${state.bpm} bpm · 4/4 · loop ${state.lengthBeats / 4} bars · rendered ${loops} loops, 48 kHz-class 32-bit float`,
+    "",
+    "Layers:",
+    ...lines,
+    "",
+    "Into Logic Pro:",
+    `  1. New project, set the tempo to ${state.bpm} bpm.`,
+    "  2. Fastest: drag stems/*.wav into the arrange window — every layer as audio, exactly as the workshop played it",
+    "     (00_mix.wav is everything together).",
+    "  3. To keep playing/editing the parts: drag song.mid in (one track per layer). On each track choose",
+    "     AU Instruments > Adam > Adam Core Synth (or Adam Drums for the drum track); the sounds/*.preset files list",
+    "     every parameter value of each layer's sound.",
+    "  4. takes/*.wav are the raw recorded takes (before level and the latency fix).",
+    "",
+    "session.adamsession reopens the whole sketch in the workshop (Session > Import).",
+    "",
+  ].join("\n");
 }
 
 function floatsToBase64(f32) {

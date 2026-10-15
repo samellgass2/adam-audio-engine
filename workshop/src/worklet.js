@@ -37,6 +37,9 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     this.inputPeak = 0;
     this.lastBeat = 0;
     this.port.onmessage = (e) => this.onMessage(e.data);
+    // offline export: the whole session arrives with the node and is applied
+    // before the first sample (no race with message delivery)
+    for (const m of options.processorOptions.setup || []) this.onMessage(m);
     this.port.postMessage({ type: "ready", sampleRate });
   }
 
@@ -154,6 +157,7 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         break;
       }
       case "mute": if (layer) layer.muted = !!m.on; break;
+      case "stopAfter": this.stopAfter = m.frames; this.framesDone = 0; break; // offline export: N loops, then tails
       // ---- audio layers: a recorded take played in phase with the loop
       case "addAudioLayer":
         if (this.layers.length < MAX_LAYERS) {
@@ -273,6 +277,8 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     const out = outputs[0];
     const frames = out[0].length;
     const w = this.wasm;
+    if (this.stopAfter && this.playing && this.framesDone >= this.stopAfter) this.onMessage({ type: "play", on: false });
+    this.framesDone = (this.framesDone || 0) + frames;
     const mic = inputs[0] && inputs[0][0]; // mono mic (or nothing)
     if (mic) for (let i = 0; i < mic.length; i++) this.inputPeak = Math.max(this.inputPeak, Math.abs(mic[i]));
     const beatBefore = this.masterBeat();
