@@ -34,6 +34,8 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     this.ringL = new Float32Array(RING);
     this.ringR = new Float32Array(RING);
     this.ringPos = 0;
+    this.inputPeak = 0;
+    this.lastBeat = 0;
     this.port.onmessage = (e) => this.onMessage(e.data);
     this.port.postMessage({ type: "ready", sampleRate });
   }
@@ -152,6 +154,43 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         break;
       }
       case "mute": if (layer) layer.muted = !!m.on; break;
+      // ---- audio layers: a recorded take played in phase with the loop
+      case "addAudioLayer":
+        if (this.layers.length < MAX_LAYERS) {
+          this.layers.push({ kind: "audio", synth: 0, muted: false, recording: false, notes: [], hasPattern: false,
+            take: null, passes: 1, pass: 0, gain: 1, offset: 0, armed: false, capture: null, capturePos: 0 });
+        }
+        this.port.postMessage({ type: "layers", count: this.layers.length });
+        break;
+      case "setAudio":  // a take from storage (or replaced)
+        if (layer && layer.kind === "audio") {
+          layer.take = m.samples || null;
+          layer.passes = m.passes || 1;
+          layer.pass = 0;
+        }
+        break;
+      case "audioParams":
+        if (layer && layer.kind === "audio") {
+          if (m.gain !== undefined) layer.gain = m.gain;
+          if (m.offset !== undefined) layer.offset = Math.round(m.offset); // samples, + = play earlier
+        }
+        break;
+      case "armAudio": {  // record m.passes loop passes, starting at the next bar 1
+        if (!layer || layer.kind !== "audio") break;
+        if (!m.on) {
+          layer.armed = false;
+          layer.recording = false;
+          layer.capture = null;
+          break;
+        }
+        const loopSamples = Math.round((this.loopLength() * 60 / this.bpm) * sampleRate);
+        layer.passes = Math.max(1, Math.min(8, m.passes || 1));
+        layer.capture = new Float32Array(loopSamples * layer.passes); // allocated here, not in process()
+        layer.capturePos = 0;
+        layer.armed = true;
+        layer.recording = false;
+        break;
+      }
       case "resetLayers": {  // opening a session: back to just the backing layer
         for (const l of this.layers.slice(1)) if (l.synth) w.adam_synth_destroy(l.synth);
         this.layers.length = 1;
@@ -230,10 +269,13 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     this.port.postMessage({ type: "layerPattern", layer: this.layers.indexOf(layer), text, notes: layer.notes });
   }
 
-  process(_inputs, outputs) {
+  process(inputs, outputs) {
     const out = outputs[0];
     const frames = out[0].length;
     const w = this.wasm;
+    const mic = inputs[0] && inputs[0][0]; // mono mic (or nothing)
+    if (mic) for (let i = 0; i < mic.length; i++) this.inputPeak = Math.max(this.inputPeak, Math.abs(mic[i]));
+    const beatBefore = this.masterBeat();
     const buf = () => w.memory.buffer;
     const L = new Float32Array(buf(), w.adam_bus_left(this.bus), frames);
     const R = new Float32Array(buf(), w.adam_bus_right(this.bus), frames);
@@ -243,7 +285,15 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
     let voices = 0;
     let nanResets = 0;
     let layerBackstop = 0;
+    // where in the loop this block starts, in samples (for audio layers)
+    const spb = (60 / this.bpm) * sampleRate;
+    const loopSamples = Math.round(this.loopLength() * spb);
+    const blockStart = Math.round(beatBefore * spb);
     for (const layer of this.layers) {
+      if (layer.kind === "audio") {
+        this.audioLayer(layer, mic, L, R, frames, blockStart, loopSamples);
+        continue;
+      }
       w.adam_synth_render(layer.synth, frames); // muted layers still run (clock, tails)
       if (metering) {
         const m = new Float32Array(buf(), w.adam_synth_read_meter(layer.synth), 8);
@@ -259,6 +309,10 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         R[i] += r[i];
       }
     }
+    // loop wrapped during this block? (audio layers count passes)
+    const beatAfter = this.masterBeat();
+    if (this.playing && beatAfter < beatBefore - 1e-9)
+      for (const l of this.layers) if (l.kind === "audio") l.pass++;
     w.adam_bus_process(this.bus, frames);
     out[0].set(L);
     if (out[1]) out[1].set(R);
@@ -285,11 +339,60 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         beat: this.masterBeat(),
         lengthBeats: this.loopLength(),
         playing: w.adam_seq_playing(this.layers[0].synth) === 1,
-        recording: this.layers.map((l) => l.recording),
+        recording: this.layers.map((l) => l.recording || (l.armed ? "armed" : false)),
+        inputPeak: this.inputPeak,
       });
     }
+    if (metering) this.inputPeak = 0;
     this.blocks++;
     return true;
+  }
+
+  // One audio layer for one block: capture from the mic while recording, and
+  // play its take in phase with the loop.
+  audioLayer(layer, mic, L, R, frames, blockStart, loopSamples) {
+    if (layer.armed && this.playing) {
+      for (let i = 0; i < frames; i++) {
+        const pos = blockStart + i;
+        if (!layer.recording) {
+          if (pos % loopSamples !== 0) continue; // wait for bar 1
+          layer.recording = true;
+          layer.capturePos = 0;
+        }
+        layer.capture[layer.capturePos++] = mic ? mic[i] : 0;
+        if (layer.capturePos >= layer.capture.length) {
+          layer.armed = false;
+          layer.recording = false;
+          layer.take = layer.capture;
+          layer.capture = null;
+          // a take always ends on a loop boundary, and that wrap (counted after
+          // this) brings the pass to 0: the take replays from its first pass
+          layer.pass = -1;
+          const copy = layer.take.slice();
+          this.port.postMessage({ type: "take", layer: this.layers.indexOf(layer), samples: copy, passes: layer.passes,
+            sampleRate }, [copy.buffer]);
+          break;
+        }
+      }
+    }
+    const take = layer.take;
+    if (!take || layer.muted || !this.playing || layer.recording) return;
+    const len = take.length;
+    const pass = Math.max(0, layer.pass);
+    const passBase = (pass % layer.passes) * loopSamples;
+    for (let i = 0; i < frames; i++) {
+      let pos = blockStart + i;
+      let base = passBase;
+      if (pos >= loopSamples) { // the wrap falls inside this block
+        pos -= loopSamples;
+        base = ((pass + 1) % layer.passes) * loopSamples;
+      }
+      let idx = base + pos + layer.offset;
+      idx = ((idx % len) + len) % len;
+      const s = take[idx] * layer.gain;
+      L[i] += s;
+      R[i] += s;
+    }
   }
 }
 

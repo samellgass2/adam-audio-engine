@@ -58,8 +58,9 @@ const state = {
 
 const layer = () => state.layers[state.selected];
 const kind = () => layer().kind;
+const isAudio = () => kind() === "audio";
 const mirror = () => state.mirrors[kind()];
-const params = () => state.paramsByKind[kind()];
+const params = () => state.paramsByKind[kind()] || [];
 
 // ---------------------------------------------------------------- engine
 function writeText(handle, text) {
@@ -121,6 +122,7 @@ function applyPresetText(text, name) {
 }
 
 function rememberSound() {
+  if (isAudio()) return;
   $("presetText").value = presetText();
   layer().presetText = $("presetText").value;
 }
@@ -306,6 +308,12 @@ function storePatches(patches) {
 function refreshPresetOptions() {
   const sel = $("preset");
   sel.innerHTML = "";
+  sel.disabled = isAudio();
+  $("presetFor").textContent = layer().name;
+  if (isAudio()) {
+    sel.add(new Option("(a recorded take)", ""));
+    return;
+  }
   for (const p of state.presets.filter((p) => p.kind === kind())) sel.add(new Option(p.name, p.file));
   const mine = Object.entries(loadPatches()).filter(([, v]) => v.kind === kind());
   if (mine.length) {
@@ -368,10 +376,10 @@ function selectLayer(i) {
   releaseAll(); // notes belong to the layer they started on
   const prevKind = state.layers[state.selected]?.kind;
   state.selected = i;
-  if (layer().presetText) state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), layer().presetText));
+  if (!isAudio() && layer().presetText) state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), layer().presetText));
   if (kind() !== prevKind) buildParams();
   for (const p of params()) state.controls.get(p.index)?.set(getParam(p.index));
-  $("presetText").value = layer().presetText;
+  $("presetText").value = layer().presetText || "";
   refreshPresetOptions();
   refreshKeyboard();
   refreshRoll();
@@ -398,6 +406,7 @@ async function addLayer(k) {
 
 function toggleRecord(i) {
   const l = state.layers[i];
+  if (l.kind === "audio") return armTake(i);
   if (!l.recording && !state.playing) setPlaying(true); // recording needs the loop running
   l.recording = !l.recording;
   if (l.recording) selectLayer(i);
@@ -411,8 +420,11 @@ function renderLayers() {
   state.layers.forEach((l, i) => {
     const row = document.createElement("div");
     row.className = `layer${i === state.selected ? " selected" : ""}${l.recording ? " recording" : ""}`;
-    const icon = l.kind === "drums" ? "🥁" : "🎹";
-    const info = l.notes.length ? `${l.notes.length} notes` : i === 0 ? "empty loop" : "empty — Rec, or tap the roll";
+    const icon = l.kind === "drums" ? "🥁" : l.kind === "audio" ? "🎙" : "🎹";
+    const info = l.kind === "audio"
+      ? l.recording === "armed" ? "armed — recording starts at bar 1"
+        : l.recording ? "recording…" : l.takeSeconds ? `take · ${l.takeSeconds.toFixed(1)} s` : "empty — press Rec"
+      : l.notes.length ? `${l.notes.length} notes` : i === 0 ? "empty loop" : "empty — Rec, or tap the roll";
     row.innerHTML = `<button class="pick" aria-label="Edit ${l.name}">${i === state.selected ? "●" : "○"}</button>
       <div class="lname"><b>${icon} ${l.name}</b><span>${info}</span></div>`;
     const actions = document.createElement("div");
@@ -428,8 +440,9 @@ function renderLayers() {
       });
       actions.appendChild(b);
     };
-    btn(l.recording ? "■ Stop rec" : "● Rec", "Record what you play into this layer (overdubs)", () => toggleRecord(i),
-      l.recording ? "rec on" : "rec");
+    btn(l.recording ? (l.kind === "audio" ? "■ Cancel" : "■ Stop rec") : "● Rec",
+      l.kind === "audio" ? "Record a take from the next bar 1" : "Record what you play into this layer (overdubs)",
+      () => toggleRecord(i), l.recording ? "rec on" : "rec");
     btn(l.muted ? "Unmute" : "Mute", "Mute this layer", () => {
       l.muted = !l.muted;
       post({ type: "mute", layer: i, on: l.muted });
@@ -440,7 +453,7 @@ function renderLayers() {
     row.addEventListener("click", () => selectLayer(i));
     box.appendChild(row);
   });
-  $("addSynth").disabled = $("addDrums").disabled = state.layers.length >= MAX_LAYERS;
+  $("addSynth").disabled = $("addDrums").disabled = $("addAudio").disabled = state.layers.length >= MAX_LAYERS;
   $("editing").textContent = layer().name;
   $("rollName").textContent = layer().name;
 }
@@ -460,7 +473,8 @@ function sessionSnapshot() {
     key: { root: state.keyRoot, scale: state.keyScale },
     layers: state.layers.map((l) => ({
       name: l.name, kind: l.kind, presetText: l.presetText, presetName: l.presetName, muted: l.muted,
-      notes: l.notes, audioId: l.audioId || null, gain: l.gain ?? 1,
+      notes: l.notes, audioId: l.audioId || null, gain: l.gain ?? 1, offsetMs: l.offsetMs ?? 0,
+      passes: l.passes || 1, audioSr: l.audioSr || 0,
     })),
   };
 }
@@ -628,12 +642,205 @@ function base64ToFloats(b64) {
   return new Float32Array(bytes.buffer);
 }
 
-// Audio layers are added in the next chunk; until then a session with one
-// keeps its place but stays silent.
-async function restoreAudioLayer() {}
+// ---------------------------------------------------------- audio layers
+// A take is mono samples recorded on the loop's own clock (the mic feeds the
+// same worklet the engine runs in). Stored in IndexedDB, referenced by id.
+let micStream = null;
+
+async function ensureMic() {
+  if (micStream) return micStream;
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("this browser cannot record audio here");
+  micStream = await navigator.mediaDevices.getUserMedia({
+    // raw input: what a vocal or instrument take wants
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+  });
+  state.ctx.createMediaStreamSource(micStream).connect(state.node);
+  return micStream;
+}
+
+function estimatedLatencyMs() {
+  const track = micStream?.getAudioTracks()[0];
+  const input = track?.getSettings?.().latency || 0;
+  return Math.round(((state.ctx.baseLatency || 0) + (state.ctx.outputLatency || 0) + input) * 1000);
+}
+
+async function addAudioLayer() {
+  if (state.layers.length >= MAX_LAYERS) return;
+  try {
+    await ensureMic();
+  } catch (err) {
+    const framed = window.top !== window;
+    alert(`Microphone unavailable: ${err.message}.${framed ? " Use ⤢ Full page (top right) — the Staging frame may block the mic." : ""}`);
+    return;
+  }
+  const n = state.layers.filter((l) => l.kind === "audio").length + 1;
+  state.layers.push({ name: `Audio ${n}`, kind: "audio", presetText: "", presetName: "", muted: false, recording: false,
+    notes: [], gain: 1, offsetMs: estimatedLatencyMs(), passes: 1, audioId: null, audioSr: 0, takeSeconds: 0 });
+  post({ type: "addAudioLayer" });
+  const i = state.layers.length - 1;
+  sendAudioParams(i);
+  state.selected = -1;
+  selectLayer(i);
+  markDirty();
+}
+
+function sendAudioParams(i) {
+  const l = state.layers[i];
+  post({ type: "audioParams", layer: i, gain: l.gain ?? 1,
+    offset: ((l.offsetMs ?? 0) / 1000) * (state.ctx?.sampleRate || 48000) });
+}
+
+function armTake(i) {
+  const l = state.layers[i];
+  if (l.recording) {
+    post({ type: "armAudio", layer: i, on: false });
+    l.recording = false;
+    renderLayers();
+    return;
+  }
+  if (!state.playing) setPlaying(true); // the take records over the loop
+  post({ type: "armAudio", layer: i, on: true, passes: l.passes || 1 });
+  l.recording = "armed";
+  selectLayer(i);
+  renderLayers();
+}
+
+async function onTake(m) {
+  const l = state.layers[m.layer];
+  if (!l) return;
+  l.recording = false;
+  l.audioId = l.audioId || `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  l.audioSr = m.sampleRate;
+  l.passes = m.passes;
+  l.takeSeconds = m.samples.length / m.sampleRate;
+  l.take = m.samples;
+  try {
+    await audioStore.put(l.audioId, m.samples);
+  } catch (err) {
+    $("sessionState").textContent = `take not stored (${err.message}) — export the session to keep it`;
+  }
+  if (state.layers[state.selected] === l) drawTake(l);
+  renderLayers();
+  markDirty();
+}
+
+function resample(samples, from, to) {
+  if (!from || from === to) return samples;
+  const out = new Float32Array(Math.round((samples.length * to) / from));
+  const r = from / to;
+  for (let i = 0; i < out.length; i++) {
+    const x = i * r, k = Math.floor(x), f = x - k;
+    out[i] = (samples[k] || 0) * (1 - f) + (samples[k + 1] || 0) * f;
+  }
+  return out;
+}
+
+async function restoreAudioLayer(i, l) {
+  post({ type: "addAudioLayer" });
+  if (l.audioId) {
+    const samples = await audioStore.get(l.audioId).catch(() => null);
+    if (samples) {
+      const sr = state.ctx?.sampleRate || 48000;
+      const take = resample(samples, l.audioSr || sr, sr);
+      state.layers[i].take = take;
+      state.layers[i].takeSeconds = take.length / sr;
+      post({ type: "setAudio", layer: i, samples: take.slice(), passes: l.passes || 1 });
+    }
+  }
+  sendAudioParams(i);
+}
+
+function drawTake(l) {
+  const c = $("wave");
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth * dpr, h = c.clientHeight * dpr;
+  if (c.width !== w || c.height !== h) {
+    c.width = w;
+    c.height = h;
+  }
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = css("--muted");
+  g.font = `${11 * dpr}px sans-serif`;
+  if (!l.take) {
+    g.fillText(l.audioId ? "take stored — open the session after starting audio" : "no take yet", 10 * dpr, h / 2);
+    return;
+  }
+  // loop boundaries for multi-pass takes
+  g.strokeStyle = css("--line");
+  for (let p = 1; p < (l.passes || 1); p++) {
+    const x = (p / l.passes) * w;
+    g.beginPath();
+    g.moveTo(x, 0);
+    g.lineTo(x, h);
+    g.stroke();
+  }
+  g.fillStyle = css("--accent");
+  const step = Math.max(1, Math.floor(l.take.length / w));
+  for (let x = 0; x < w; x++) {
+    let peak = 0;
+    for (let i = x * step, end = Math.min(l.take.length, (x + 1) * step); i < end; i++)
+      peak = Math.max(peak, Math.abs(l.take[i]));
+    const bh = Math.max(1, peak * h * 0.95);
+    g.fillRect(x, (h - bh) / 2, 1, bh);
+  }
+}
+
+// 32-bit float mono WAV
+function wavBytes(samples, sr) {
+  const buf = new ArrayBuffer(44 + samples.length * 4);
+  const v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 4, true); str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 3, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 32, true);
+  str(36, "data"); v.setUint32(40, samples.length * 4, true);
+  new Float32Array(buf, 44).set(samples);
+  return new Uint8Array(buf);
+}
+
+function audioPanelEvents() {
+  $("takePasses").addEventListener("change", () => {
+    layer().passes = Number($("takePasses").value);
+    markDirty();
+  });
+  $("takeGain").addEventListener("input", () => {
+    layer().gain = Number($("takeGain").value);
+    $("takeGainVal").textContent = `${Math.round(layer().gain * 100)}%`;
+    sendAudioParams(state.selected);
+    markDirty();
+  });
+  $("takeOffset").addEventListener("input", () => {
+    layer().offsetMs = Number($("takeOffset").value);
+    $("takeOffsetVal").textContent = `${layer().offsetMs} ms`;
+    sendAudioParams(state.selected);
+    markDirty();
+  });
+  $("takeWav").addEventListener("click", () => {
+    const l = layer();
+    if (!l.take) return alert("No take recorded yet.");
+    download(`${l.name.replace(/\s+/g, "_").toLowerCase()}.wav`, wavBytes(l.take, state.ctx.sampleRate), "audio/wav");
+  });
+  $("addAudio").addEventListener("click", addAudioLayer);
+}
 
 // ------------------------------------------------------------ piano roll
 function refreshRoll() {
+  const audio = isAudio();
+  $("roll").hidden = audio;
+  $("rollTools").hidden = audio;
+  $("audioPanel").hidden = !audio;
+  $("loadPattern").disabled = audio;
+  if (audio) {
+    const l = layer();
+    $("takePasses").value = String(l.passes || 1);
+    $("takeGain").value = l.gain ?? 1;
+    $("takeGainVal").textContent = `${Math.round((l.gain ?? 1) * 100)}%`;
+    $("takeOffset").value = l.offsetMs ?? 0;
+    $("takeOffsetVal").textContent = `${Math.round(l.offsetMs ?? 0)} ms`;
+    drawTake(l);
+    return;
+  }
   state.roll.setLayer({ kind: kind(), notes: layer().notes, lengthBeats: state.lengthBeats });
   applyScaleToRoll();
 }
@@ -738,11 +945,12 @@ function buildPads() {
 
 function refreshKeyboard() {
   const drums = kind() === "drums";
-  $("keyboard").hidden = drums;
+  const audio = isAudio();
+  $("keyboard").hidden = drums || audio;
   $("pads").hidden = !drums;
-  $("keyControls").hidden = drums;
-  $("playTitle").textContent = drums ? "Drum pads" : "Play it";
-  if (!drums) buildKeyboard();
+  $("keyControls").hidden = drums || audio;
+  $("playTitle").textContent = audio ? "Recording a take — sing or play into the mic" : drums ? "Drum pads" : "Play it";
+  if (!drums && !audio) buildKeyboard();
 }
 
 function shiftOctave(d) {
@@ -812,7 +1020,7 @@ async function startAudio() {
   const ctx = new AudioContext({ latencyHint: "interactive" });
   await ctx.audioWorklet.addModule("./worklet.js");
   const node = new AudioWorkletNode(ctx, "adam-synth", {
-    numberOfInputs: 0,
+    numberOfInputs: 1, // the microphone, when an audio layer asks for it
     numberOfOutputs: 1,
     outputChannelCount: [2],
     processorOptions: { wasm: state.wasmBytes },
@@ -853,6 +1061,10 @@ function onWorkletMessage(m) {
     }
     return;
   }
+  if (m.type === "take") {
+    onTake(m);
+    return;
+  }
   if (m.type === "snapshot") {
     // the most recent ~85 ms; only while the panel is open
     if ($("agentPanel").open) analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096));
@@ -875,6 +1087,7 @@ function onWorkletMessage(m) {
   $("beatbar").style.width = `${((m.beat % state.lengthBeats) / state.lengthBeats) * 100}%`;
   state.roll.playhead = state.playing ? m.beat : -1;
   if (state.playing && !m.playing) setPlaying(false); // a non-looping pattern ended
+  if (m.inputPeak !== undefined) $("inLevel").style.width = `${Math.min(100, Math.sqrt(m.inputPeak) * 100)}%`;
   if (m.recording) m.recording.forEach((r, i) => {
     if (state.layers[i] && state.layers[i].recording !== r) {
       state.layers[i].recording = r;
@@ -1081,6 +1294,7 @@ async function boot() {
     buildPads();
     keyboardEvents();
     sessionEvents();
+    audioPanelEvents();
     await refreshSessionList();
     // the backing layer starts on the first synth preset
     const first = state.presets.find((p) => p.kind === "synth");
