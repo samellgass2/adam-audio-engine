@@ -59,6 +59,21 @@
 
     <section class="card">
       <div class="row between">
+        <h2>Session · <span id="sessionName">Untitled</span></h2>
+        <span class="hint" id="sessionState"></span>
+      </div>
+      <div class="row">
+        <button id="sessSave">Save</button>
+        <button id="sessSaveAs">Save as…</button>
+        <label class="field inline"><span>Open</span><select id="sessOpen"></select></label>
+        <button id="sessNew">New</button>
+        <button id="sessExport" title="Download the whole session as a file">Export</button>
+        <label class="filebtn">Import<input id="sessImport" type="file" accept=".adamsession,application/json" hidden /></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
         <h2>Layers</h2>
         <div class="row">
           <button id="addSynth">+ Synth</button>

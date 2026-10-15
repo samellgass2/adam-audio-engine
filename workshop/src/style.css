@@ -152,3 +152,5 @@ details.panel[open] > summary { margin-bottom: 10px; }
 .metric { min-height: 76px; }
 .metric .v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #fullPage { color: var(--accent); font-size: 13px; text-decoration: none; }
+.filebtn { font: inherit; padding: 8px 14px; min-height: 40px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-2); cursor: pointer; display: inline-flex; align-items: center; }

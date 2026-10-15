@@ -8,6 +8,7 @@
 // same WASM per instrument kind answers parameter mapping / preset / tempo
 // questions, so no synth logic is re-implemented in JavaScript.
 import { PianoRoll, DRUM_ROWS, noteName } from "./pianoroll.js";
+import { sessions as sessionStore, audio as audioStore } from "./store.js";
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -51,6 +52,8 @@ const state = {
   layers: [{ name: "Backing", kind: "synth", presetText: "", presetName: "", muted: false, recording: false, notes: [] }],
   selected: 0,
   roll: null,
+  sessionName: "Untitled",
+  dirty: false,
 };
 
 const layer = () => state.layers[state.selected];
@@ -100,6 +103,7 @@ function setParam(i, physical) {
   post({ type: "param", index: i, value: v, layer: state.selected });
   state.controls.get(i)?.set(v);
   rememberSound();
+  markDirty();
   return v;
 }
 
@@ -113,6 +117,7 @@ function applyPresetText(text, name) {
   post({ type: "preset", bytes: enc.encode(text), layer: state.selected });
   if (name) layer().presetName = name;
   rememberSound();
+  markDirty();
 }
 
 function rememberSound() {
@@ -388,6 +393,7 @@ async function addLayer(k) {
   state.selected = -1;
   selectLayer(state.layers.length - 1);
   sendNotes(state.layers.length - 1);
+  markDirty();
 }
 
 function toggleRecord(i) {
@@ -428,6 +434,7 @@ function renderLayers() {
       l.muted = !l.muted;
       post({ type: "mute", layer: i, on: l.muted });
       renderLayers();
+      markDirty();
     }, l.muted ? "toggle on" : "toggle");
     row.appendChild(actions);
     row.addEventListener("click", () => selectLayer(i));
@@ -437,6 +444,193 @@ function renderLayers() {
   $("editing").textContent = layer().name;
   $("rollName").textContent = layer().name;
 }
+
+// --------------------------------------------------------------- sessions
+// A session is everything needed to come back to a sketch: tempo, loop, key,
+// and per layer its instrument, full sound (preset text), notes and mute.
+// Audio takes are stored separately (store.js) and referenced by id.
+function sessionSnapshot() {
+  return {
+    format: "adam-session/1",
+    name: state.sessionName,
+    savedAt: new Date().toISOString(),
+    bpm: state.bpm,
+    lengthBeats: state.lengthBeats,
+    backing: $("pattern").value,
+    key: { root: state.keyRoot, scale: state.keyScale },
+    layers: state.layers.map((l) => ({
+      name: l.name, kind: l.kind, presetText: l.presetText, presetName: l.presetName, muted: l.muted,
+      notes: l.notes, audioId: l.audioId || null, gain: l.gain ?? 1,
+    })),
+  };
+}
+
+function markDirty() {
+  state.dirty = true;
+  $("sessionState").textContent = "unsaved changes";
+  clearTimeout(markDirty.timer);
+  // autosave so a reload or a closed tab never loses the sketch
+  markDirty.timer = setTimeout(() => sessionStore.put("(autosave)", sessionSnapshot()).catch(() => {}), 1500);
+}
+
+async function refreshSessionList(select) {
+  const sel = $("sessOpen");
+  sel.innerHTML = "";
+  sel.add(new Option("—", ""));
+  let names = [];
+  try {
+    names = (await sessionStore.list()).sort();
+  } catch (err) {
+    $("sessionState").textContent = `can't store sessions here: ${err.message}`;
+  }
+  for (const n of names) sel.add(new Option(n, n));
+  if (select) sel.value = select;
+}
+
+async function saveSession(asNew) {
+  let name = state.sessionName;
+  if (asNew || name === "Untitled") {
+    name = prompt("Name this session", name === "Untitled" ? "My sketch" : `${name} 2`)?.trim();
+    if (!name) return;
+  }
+  state.sessionName = name;
+  try {
+    await sessionStore.put(name, sessionSnapshot());
+    state.dirty = false;
+    $("sessionName").textContent = name;
+    $("sessionState").textContent = `saved ${new Date().toLocaleTimeString()}`;
+    await refreshSessionList(name);
+  } catch (err) {
+    alert(`Could not save: ${err.message}. Use Export instead.`);
+  }
+}
+
+async function applySession(sess) {
+  if (!sess || !Array.isArray(sess.layers) || !sess.layers.length) throw new Error("not a session");
+  releaseAll();
+  setPlaying(false);
+  post({ type: "resetLayers" });
+  state.sessionName = sess.name || "Untitled";
+  $("sessionName").textContent = state.sessionName;
+  state.bpm = Math.round(sess.bpm || 100);
+  state.lengthBeats = sess.lengthBeats || 16;
+  $("bpm").value = state.bpm;
+  $("bpmval").textContent = `${state.bpm} bpm`;
+  post({ type: "bpm", bpm: state.bpm });
+  if ([...$("pattern").options].some((o) => o.value === sess.backing)) $("pattern").value = sess.backing;
+  state.keyRoot = sess.key?.root ?? 0;
+  state.keyScale = sess.key?.scale ?? "chromatic";
+  $("keyRoot").value = state.keyRoot;
+  $("keyScale").value = state.keyScale;
+  // layer 0 is the clock: its notes + the session's loop length
+  const [first, ...rest] = sess.layers;
+  state.layers = [{ ...first, kind: "synth", recording: false, notes: first.notes || [] }];
+  state.selected = 0;
+  post({ type: "pattern", notes: state.layers[0].notes,
+    bytes: enc.encode(patternText(state.layers[0].notes, state.bpm, state.lengthBeats)) });
+  post({ type: "preset", bytes: enc.encode(first.presetText || ""), layer: 0 });
+  if (first.muted) post({ type: "mute", layer: 0, on: true });
+  for (const l of rest) {
+    const i = state.layers.length;
+    state.layers.push({ ...l, recording: false, notes: l.notes || [] });
+    if (l.kind === "audio") {
+      await restoreAudioLayer(i, l);
+    } else {
+      post({ type: "addLayer", kind: KIND[l.kind], bytes: enc.encode(l.presetText || "") });
+      sendNotes(i);
+    }
+    if (l.muted) post({ type: "mute", layer: i, on: true });
+  }
+  // the mirror + UI follow layer 0
+  state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), first.presetText || ""));
+  buildParams();
+  $("presetText").value = layer().presetText || "";
+  refreshPresetOptions();
+  refreshKeyboard();
+  refreshRoll();
+  renderLayers();
+  state.dirty = false;
+  $("sessionState").textContent = `opened ${sess.savedAt ? new Date(sess.savedAt).toLocaleString() : ""}`;
+}
+
+async function newSession() {
+  if (state.dirty && !confirm("Start a new session? Unsaved changes stay in the autosave.")) return;
+  const first = state.presets.find((p) => p.kind === "synth");
+  const text = await fetch(`./presets/${first.file}`).then((r) => r.text());
+  await applySession({ name: "Untitled", bpm: 100, lengthBeats: 16, backing: "__empty4",
+    layers: [{ name: "Backing", kind: "synth", presetText: text, presetName: first.file, notes: [] }] });
+  state.w.adam_synth_apply_preset(mirror(), writeText(mirror(), text));
+  rememberSound();
+}
+
+function sessionEvents() {
+  $("sessSave").addEventListener("click", () => saveSession(false));
+  $("sessSaveAs").addEventListener("click", () => saveSession(true));
+  $("sessNew").addEventListener("click", newSession);
+  $("sessOpen").addEventListener("change", async () => {
+    const name = $("sessOpen").value;
+    if (!name) return;
+    if (state.dirty && !confirm(`Open "${name}"? Unsaved changes stay in the autosave.`)) {
+      $("sessOpen").value = "";
+      return;
+    }
+    try {
+      await applySession(await sessionStore.get(name));
+      if (name === "(autosave)") state.sessionName = "Untitled";
+    } catch (err) {
+      alert(`Could not open "${name}": ${err.message}`);
+    }
+    $("sessOpen").value = "";
+  });
+  $("sessExport").addEventListener("click", async () => {
+    const sess = sessionSnapshot();
+    // inline audio takes so the file is self-contained
+    for (const l of sess.layers) {
+      if (!l.audioId) continue;
+      const samples = await audioStore.get(l.audioId).catch(() => null);
+      if (samples) l.audioBase64 = floatsToBase64(samples);
+    }
+    download(`${state.sessionName.replace(/\W+/g, "_").toLowerCase() || "session"}.adamsession`,
+      JSON.stringify(sess), "application/json");
+  });
+  $("sessImport").addEventListener("change", async () => {
+    const file = $("sessImport").files[0];
+    if (!file) return;
+    try {
+      const sess = JSON.parse(await file.text());
+      for (const l of sess.layers || []) {
+        if (l.audioBase64) {
+          l.audioId = l.audioId || `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          await audioStore.put(l.audioId, base64ToFloats(l.audioBase64));
+          delete l.audioBase64;
+        }
+      }
+      await applySession(sess);
+      markDirty();
+    } catch (err) {
+      alert(`Could not import: ${err.message}`);
+    }
+    $("sessImport").value = "";
+  });
+}
+
+function floatsToBase64(f32) {
+  const bytes = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function base64ToFloats(b64) {
+  const s = atob(b64);
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+
+// Audio layers are added in the next chunk; until then a session with one
+// keeps its place but stays silent.
+async function restoreAudioLayer() {}
 
 // ------------------------------------------------------------ piano roll
 function refreshRoll() {
@@ -448,6 +642,7 @@ function onRollChange(notes) {
   layer().notes = notes;
   sendNotes(state.selected);
   renderLayers();
+  markDirty();
 }
 
 function stepEntryActive() {
@@ -654,6 +849,7 @@ function onWorkletMessage(m) {
       l.notes = m.notes || [];
       if (m.layer === state.selected) refreshRoll();
       renderLayers();
+      markDirty();
     }
     return;
   }
@@ -884,6 +1080,8 @@ async function boot() {
     buildParams();
     buildPads();
     keyboardEvents();
+    sessionEvents();
+    await refreshSessionList();
     // the backing layer starts on the first synth preset
     const first = state.presets.find((p) => p.kind === "synth");
     state.layers[0].presetName = first.file;
@@ -914,6 +1112,7 @@ async function boot() {
     state.bpm = Number($("bpm").value);
     $("bpmval").textContent = `${state.bpm} bpm`;
     post({ type: "bpm", bpm: state.bpm });
+    markDirty();
   });
   $("pattern").addEventListener("change", () => selectPattern($("pattern").value));
   $("preset").addEventListener("change", () => selectPreset($("preset").value));

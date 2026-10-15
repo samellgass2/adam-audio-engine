@@ -152,6 +152,19 @@ class AdamSynthProcessor extends AudioWorkletProcessor {
         break;
       }
       case "mute": if (layer) layer.muted = !!m.on; break;
+      case "resetLayers": {  // opening a session: back to just the backing layer
+        for (const l of this.layers.slice(1)) if (l.synth) w.adam_synth_destroy(l.synth);
+        this.layers.length = 1;
+        const l0 = this.layers[0];
+        w.adam_synth_all_sound_off(l0.synth);
+        l0.muted = false;
+        l0.recording = false;
+        l0.notes = [];
+        this.playing = false;
+        w.adam_seq_play(l0.synth, 0);
+        w.adam_seq_rewind(l0.synth);
+        break;
+      }
       case "record":
         if (!layer) break;
         if (m.on) {
