@@ -16,7 +16,10 @@
         <p class="sub"><span id="instrument">Core Synth</span> · <span id="build">…</span></p>
       </div>
     </div>
-    <button id="start" class="primary">Start audio</button>
+    <div class="row">
+      <a id="fullPage" href="./" target="_top" hidden title="Open outside the Staging frame (needed for the microphone)">⤢ Full page</a>
+      <button id="start" class="primary">Start audio</button>
+    </div>
   </header>
 
   <main id="app" class="locked">
@@ -42,7 +45,15 @@
           <span>Tempo <b id="bpmval"></b></span>
           <input id="bpm" type="range" min="40" max="200" step="1" />
         </label>
+        <button id="tap" title="Tap four times on the beat">Tap</button>
         <div class="beat" aria-label="Beat"><div id="beatbar"></div></div>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>Listening level <b id="volval"></b></span>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" />
+        </label>
+        <button id="mute" class="toggle" aria-pressed="false">Mute</button>
       </div>
     </section>
 
@@ -105,35 +116,26 @@
       <div id="pads" class="pads" hidden></div>
     </section>
 
-    <section class="monitor card">
+    <details class="card panel" id="monitorPanel">
+      <summary><h2>Meters &amp; spectrum</h2>
+        <span class="hint"><b id="peakdb">−∞</b> dBFS peak · <b id="voices">0</b> voices · <span id="safety" class="ok">output safe</span></span>
+      </summary>
       <div class="meters">
         <div class="meter"><div class="fill" id="mL"></div><div class="rms" id="rL"></div></div>
         <div class="meter"><div class="fill" id="mR"></div><div class="rms" id="rR"></div></div>
         <div class="readout">
-          <div><b id="peakdb">−∞</b> dBFS peak</div>
           <div><b id="grdb">0.0</b> dB limiting</div>
-          <div><b id="voices">0</b> voices</div>
-          <div id="safety" class="ok">output safe</div>
         </div>
       </div>
       <div class="scopes">
         <canvas id="spectrum"></canvas>
         <canvas id="scope"></canvas>
       </div>
-      <div class="row">
-        <label class="field grow">
-          <span>Listening level <b id="volval"></b></span>
-          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" />
-        </label>
-        <button id="mute" class="toggle" aria-pressed="false">Mute</button>
-      </div>
-    </section>
+    </details>
 
-    <section class="card agent">
-      <div class="row between">
-        <h2>What the agent sees</h2>
-        <span class="hint">the same measurements the tests and renders report · last 85 ms</span>
-      </div>
+    <details class="card panel agent" id="agentPanel">
+      <summary><h2>What the agent sees</h2>
+        <span class="hint">the measurements the tests and renders report · last 85 ms</span></summary>
       <div class="metrics" id="metrics"></div>
       <div class="agent-charts">
         <div>
@@ -145,7 +147,7 @@
           <canvas id="bands"></canvas>
         </div>
       </div>
-    </section>
+    </details>
 
     <section id="params" class="params"></section>
 

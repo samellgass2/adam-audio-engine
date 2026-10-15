@@ -658,7 +658,8 @@ function onWorkletMessage(m) {
     return;
   }
   if (m.type === "snapshot") {
-    analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096)); // the most recent ~85 ms
+    // the most recent ~85 ms; only while the panel is open
+    if ($("agentPanel").open) analyzeSnapshot(m.l.subarray(4096), m.r.subarray(4096));
     return;
   }
   if (m.type !== "meter") return;
@@ -728,11 +729,15 @@ function analyzeSnapshot(l, r) {
 
 const hz = (f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${Math.round(f)} Hz`);
 
+// Always the same eight cards in the same places: values change, the layout
+// does not (no jumping while you play).
 function renderAnalysis(a) {
   const silent = a.rmsDb < -70;
   const metrics = [];
   if (silent) {
-    metrics.push(["Signal", "silence", "play something"]);
+    for (const k of ["Pitch (YIN)", "Between-harmonic energy", "Brightness (centroid)", "Rolloff (85% energy)",
+      "Level", "Crest factor", "Noisiness (flatness)", "Stereo correlation"])
+      metrics.push([k, "—", k === "Level" ? "silence — play something" : ""]);
   } else {
     if (a.f0Hz > 0 && a.f0Confidence > 0.6) {
       const midi = Math.round(a.f0Midi);
@@ -743,6 +748,7 @@ function renderAnalysis(a) {
         "aliasing + noise on a HELD SINGLE note (lower = cleaner); chords and note changes raise it"]);
     } else {
       metrics.push(["Pitch (YIN)", "—", "no single pitch (a chord, drums or noise)"]);
+      metrics.push(["Between-harmonic energy", "—", "needs a single held note"]);
     }
     metrics.push(["Brightness (centroid)", hz(a.centroidHz), "where the spectrum's weight sits; higher = brighter"]);
     metrics.push(["Rolloff (85% energy)", hz(a.rolloffHz), "85% of the energy is below this"]);
@@ -783,7 +789,7 @@ function drawBars(canvas, values, label, floorDb) {
 let lastRollDraw = 0;
 function draw(t) {
   const a = state.analyser;
-  if (a) {
+  if (a && $("monitorPanel").open) {
     drawSpectrum(a);
     drawScope(a);
   }
@@ -985,6 +991,38 @@ async function boot() {
   });
   updateStepUi();
   window.addEventListener("resize", () => state.roll.draw());
+  // collapsible panels remember how you left them
+  for (const id of ["monitorPanel", "agentPanel"]) {
+    try {
+      $(id).open = localStorage.getItem(`adam.workshop.${id}`) === "open";
+    } catch {
+      /* convenience */
+    }
+    $(id).addEventListener("toggle", () => {
+      try {
+        localStorage.setItem(`adam.workshop.${id}`, $(id).open ? "open" : "closed");
+      } catch {
+        /* convenience */
+      }
+    });
+  }
+  // Tap tempo: the average of the last few taps; a 2 s pause starts over
+  const taps = [];
+  $("tap").addEventListener("click", () => {
+    const now = performance.now();
+    if (taps.length && now - taps[taps.length - 1] > 2000) taps.length = 0;
+    taps.push(now);
+    if (taps.length > 5) taps.shift();
+    if (taps.length < 2) return;
+    const gaps = taps.slice(1).map((t, i) => t - taps[i]);
+    const bpm = Math.round(60000 / (gaps.reduce((x, y) => x + y, 0) / gaps.length));
+    state.bpm = Math.max(40, Math.min(200, bpm));
+    $("bpm").value = state.bpm;
+    $("bpmval").textContent = `${state.bpm} bpm`;
+    post({ type: "bpm", bpm: state.bpm });
+  });
+  // inside the Staging frame the browser blocks the microphone: offer the full page
+  if (window.top !== window) $("fullPage").hidden = false;
 }
 
 // Standard MIDI File (format 0) from pattern text — for Logic.

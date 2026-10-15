@@ -142,3 +142,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
 button.toggle[aria-pressed="true"] { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 
 [hidden] { display: none !important; }
+
+details.panel > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between;
+  align-items: center; gap: 8px; flex-wrap: wrap; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary h2::before { content: "▸ "; color: var(--muted); }
+details.panel[open] > summary h2::before { content: "▾ "; }
+details.panel[open] > summary { margin-bottom: 10px; }
+.metric { min-height: 76px; }
+.metric .v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#fullPage { color: var(--accent); font-size: 13px; text-decoration: none; }
